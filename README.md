@@ -15,7 +15,7 @@ make clean
 
 ---
 
-# jecución
+# Ejecución
 
 ## Terminal 1
 
