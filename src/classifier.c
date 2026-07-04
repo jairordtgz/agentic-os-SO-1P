@@ -4,56 +4,54 @@
 
 #include "classifier.h"
 
-Diccionario diccionarios[3]=
+static Diccionario diccionarios[NUM_DICCIONARIOS] =
 {
     {
         "Correo electronico",
         {
-            "thank","please","regards","meeting","attached",
-            "information","update","schedule","team","project"
+            "thank", "please", "regards", "meeting", "attached",
+            "information", "update", "schedule", "team", "project"
         }
     },
-
     {
         "Articulo cientifico",
         {
-            "data","analysis","results","method","study",
-            "model","research","system","significant","effect"
+            "data", "analysis", "results", "method", "study",
+            "model", "research", "system", "significant", "effect"
         }
     },
-
     {
         "Reporte",
         {
-            "system","data","network","security","application",
-            "server","user","performance","service","infrastructure"
+            "system", "data", "network", "security", "application",
+            "server", "user", "performance", "service", "infrastructure"
         }
     }
 };
 
-void convertirMinusculas(char texto[])
+static void convertirMinusculas(char texto[])
 {
-    for(int i=0;texto[i]!='\0';i++)
-        texto[i]=tolower(texto[i]);
-}
+    int i;
 
-int esSeparador(char c)
-{
-    return c==' '  ||
-           c=='\n' ||
-           c=='\r' ||
-           c=='\t' ||
-           c==','  ||
-           c=='.'  ||
-           c==';'  ||
-           c==':';
-}
-
-int buscarPalabra(Diccionario dic, char palabra[])
-{
-    for(int i=0;i<PALABRAS;i++)
+    for (i = 0; texto[i] != '\0'; i++)
     {
-        if(strcmp(dic.palabras[i], palabra)==0)
+        texto[i] = (char)tolower((unsigned char)texto[i]);
+    }
+}
+
+static int esSeparador(char c)
+{
+    return c == ' ' || c == '\n' || c == '\r' || c == '\t' ||
+           c == ',' || c == '.' || c == ';' || c == ':';
+}
+
+static int buscarPalabra(const Diccionario *dic, const char palabra[])
+{
+    int i;
+
+    for (i = 0; i < PALABRAS; i++)
+    {
+        if (strcmp(dic->palabras[i], palabra) == 0)
         {
             return i;
         }
@@ -62,115 +60,141 @@ int buscarPalabra(Diccionario dic, char palabra[])
     return -1;
 }
 
-void construirVector(char texto[],
-                     Diccionario dic,
-                     int vector[])
+/* Suma, dentro de "vector", las frecuencias de las palabras de
+   "texto" que aparecen en el diccionario "dic". El vector NO se
+   reinicia aqui: se le va sumando lo que traiga, para poder acumular
+   varias lineas seguidas de la misma ventana. */
+static void acumularVector(const char texto[], const Diccionario *dic, int vector[])
 {
-    for(int i=0;i<PALABRAS;i++)
-    {
-        vector[i]=0;
-    }
-
-    char palabra[100];
-    int indice=0;
-
     char copia[1024];
+    char palabra[100];
+    int indice = 0;
+    int longitud;
+    int i;
 
-    strcpy(copia,texto);
+    /* strncpy + terminador manual: si el texto es mas largo que el
+       buffer local, se trunca en vez de desbordar memoria. */
+    strncpy(copia, texto, sizeof(copia) - 1);
+    copia[sizeof(copia) - 1] = '\0';
 
     convertirMinusculas(copia);
+    longitud = (int)strlen(copia);
 
-    int longitud=strlen(copia);
-
-    for(int i=0;i<=longitud;i++)
+    for (i = 0; i <= longitud; i++)
     {
-        char c=copia[i];
+        char c = copia[i];
 
-        if(esSeparador(c) || c=='\0')
+        if (esSeparador(c) || c == '\0')
         {
-            if(indice>0)
+            if (indice > 0)
             {
-                palabra[indice]='\0';
+                int posicion;
 
-                int posicion=buscarPalabra(dic,palabra);
+                palabra[indice] = '\0';
+                posicion = buscarPalabra(dic, palabra);
 
-                if(posicion!=-1)
+                if (posicion != -1)
                 {
                     vector[posicion]++;
                 }
 
-                indice=0;
+                indice = 0;
             }
         }
-        else
+        else if (indice < (int)sizeof(palabra) - 1)
         {
-            if(indice<99)
-            {
-                palabra[indice++]=c;
-            }
+            palabra[indice++] = c;
         }
     }
 }
 
-int sumaVector(int vector[])
+void documentoInicializar(DocumentoVentana *documento)
 {
-    int suma=0;
+    int i, j;
 
-    for(int i=0;i<PALABRAS;i++)
-        suma+=vector[i];
+    for (i = 0; i < NUM_DICCIONARIOS; i++)
+    {
+        for (j = 0; j < PALABRAS; j++)
+        {
+            documento->vectores[i][j] = 0;
+        }
+    }
+}
+
+void documentoAgregarLinea(DocumentoVentana *documento, char linea[])
+{
+    int i;
+
+    for (i = 0; i < NUM_DICCIONARIOS; i++)
+    {
+        acumularVector(linea, &diccionarios[i], documento->vectores[i]);
+    }
+}
+
+static int sumaVector(const int vector[])
+{
+    int suma = 0;
+    int i;
+
+    for (i = 0; i < PALABRAS; i++)
+    {
+        suma += vector[i];
+    }
 
     return suma;
 }
 
-void imprimirVector(Diccionario dic,int vector[])
+/* Aplica, sobre el documento COMPLETO de la ventana (con todas sus
+   lineas ya acumuladas), las reglas del enunciado:
+   - Si al menos 3 palabras de un diccionario aparecen en el
+     documento, el documento pertenece a esa clase.
+   - Si mas de un diccionario cumple esa condicion, gana el que tenga
+     la mayor suma de frecuencias. */
+int documentoClasificar(const DocumentoVentana *documento)
 {
-    printf("\nVector de frecuencias (%s)\n",dic.nombre);
+    int mejorTipo = DESCONOCIDO;
+    int mayorFrecuencia = 0;
+    int i;
 
-    for(int i=0;i<PALABRAS;i++)
+    for (i = 0; i < NUM_DICCIONARIOS; i++)
     {
-        printf("%-15s : %d\n",
-               dic.palabras[i],
-               vector[i]);
-    }
-}
+        int frecuencia = sumaVector(documento->vectores[i]);
 
-int clasificarDocumento(char texto[])
-{
-    int mejorTipo=DESCONOCIDO;
-
-    int mayorFrecuencia=0;
-
-    for(int i=0;i<3;i++)
-    {
-        int vector[PALABRAS];
-
-        construirVector(texto,
-                        diccionarios[i],
-                        vector);
-
-        imprimirVector(diccionarios[i],
-                       vector);
-
-        int frecuencia=sumaVector(vector);
-
-        printf("Total=%d\n\n",
-               frecuencia);
-
-        if(frecuencia>=3 &&
-           frecuencia>mayorFrecuencia)
+        if (frecuencia >= 3 && frecuencia > mayorFrecuencia)
         {
-            mayorFrecuencia=frecuencia;
-            mejorTipo=i;
+            mayorFrecuencia = frecuencia;
+            mejorTipo = i;
         }
     }
 
     return mejorTipo;
 }
 
+void documentoImprimirResumen(const DocumentoVentana *documento)
+{
+    int i, j, suma;
+
+    printf("  Frecuencias acumuladas por diccionario:\n");
+
+    for (i = 0; i < NUM_DICCIONARIOS; i++)
+    {
+        suma = 0;
+
+        for (j = 0; j < PALABRAS; j++)
+        {
+            suma += documento->vectores[i][j];
+        }
+
+        printf("    %-20s total=%d\n", diccionarios[i].nombre, suma);
+    }
+}
+
 const char *nombreClase(int tipo)
 {
-    if(tipo==DESCONOCIDO)
+    if (tipo == DESCONOCIDO)
+    {
         return "Documento desconocido";
+    }
 
     return diccionarios[tipo].nombre;
 }
