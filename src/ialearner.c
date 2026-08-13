@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <signal.h>
+#include <limits.h>
 
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -12,12 +13,15 @@
 #include "classifier.h"
 
 #define PUERTO_DEFECTO "5000"
+#define CARPETA_DICCIONARIOS_DEFECTO "diccionarios"
 #define TAMANO_BUFFER 1024
 
 int documentosCorreo = 0;
 int documentosArticulo = 0;
 int documentosReporte = 0;
 int clientesConectados = 0;
+
+DocumentoVentana matrizGlobal;
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -27,7 +31,14 @@ pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
    La clasificacion se hace UNA sola vez, cuando la conexion se
    cierra -- es decir, cuando el proceso (ventana) termina, tal como
    pide el enunciado -- en vez de clasificar cada linea por separado
-   como una version anterior de este programa hacia. */
+   como una version anterior de este programa hacia.
+
+   ADEMAS de su "documento" local, cada hilo tambien va sumando cada
+   linea a "matrizGlobal", que es la UNICA estructura de este archivo
+   que de verdad comparten todos los hilos (todas las ventanas
+   escriben en la misma matriz al mismo tiempo). Por eso, y solo por
+   eso, esa actualizacion va protegida con mutex -- "documento" es
+   privado de este hilo y no lo necesita. */
 void *atenderCliente(void *arg)
 {
     int cliente = *(int *)arg;
@@ -52,7 +63,16 @@ void *atenderCliente(void *arg)
             linea[indice] = '\0';
             printf("[ialearner] linea recibida: %s\n", linea);
 
+            /* Documento LOCAL de este hilo: nadie mas lo toca. */
             documentoAgregarLinea(&documento, linea);
+
+            /* Matriz GLOBAL, compartida por todos los hilos: aqui
+               si hace falta el mutex, porque dos hilos podrian estar
+               incrementando la misma posicion del vector al mismo
+               tiempo si no se protege. */
+            pthread_mutex_lock(&mutex);
+            documentoAgregarLinea(&matrizGlobal, linea);
+            pthread_mutex_unlock(&mutex);
 
             indice = 0;
         }
@@ -71,12 +91,17 @@ void *atenderCliente(void *arg)
 
     /* Si la ventana se cerro con texto pendiente (el usuario escribio
        algo pero nunca presiono Enter), no se pierde: se cuenta igual
-       que una linea mas del documento. */
+       que una linea mas del documento (local y global por igual). */
     if (indice > 0)
     {
         linea[indice] = '\0';
         printf("[ialearner] linea final (sin Enter): %s\n", linea);
+
         documentoAgregarLinea(&documento, linea);
+
+        pthread_mutex_lock(&mutex);
+        documentoAgregarLinea(&matrizGlobal, linea);
+        pthread_mutex_unlock(&mutex);
     }
 
     printf("\n=============================\n");
@@ -89,6 +114,7 @@ void *atenderCliente(void *arg)
 
     printf("\nClasificacion final de la ventana: %s\n", nombreClase(tipo));
     printf("=============================\n\n");
+    fflush(stdout);
 
     printf("Cliente desconectado.\n");
     fflush(stdout);
@@ -102,6 +128,8 @@ void *atenderCliente(void *arg)
     }
 
     pthread_mutex_unlock(&mutex);
+
+    documentoLiberar(&documento);
 
     close(cliente);
 
@@ -134,7 +162,14 @@ void actualizarResumen(int tipo)
    imprimirse mas de una vez durante la sesion -- cada vez mostrando
    los totales acumulados hasta ese momento. El ultimo resumen
    impreso antes de cerrar ialearner es el que refleja el total real
-   de toda la sesion. */
+   de toda la sesion.
+
+   IMPORTANTE: esta funcion se llama SIEMPRE con el mutex ya tomado
+   por quien la invoca (ver atenderCliente). Por eso lee "matrizGlobal"
+   directamente, SIN volver a hacer lock aqui adentro -- si lo
+   hiciera, el mismo hilo intentaria tomar un mutex que el ya tiene
+   tomado, y el programa se quedaria congelado esperandose a si mismo
+   (esto se llama deadlock). */
 void mostrarResumenFinal(void)
 {
     int total = documentosCorreo + documentosArticulo + documentosReporte;
@@ -147,10 +182,14 @@ void mostrarResumenFinal(void)
     printf("Articulo cientifico: %d\n", documentosArticulo);
     printf("Reporte            : %d\n", documentosReporte);
 
+    printf("\nMatriz global (todas las ventanas combinadas, en vivo):\n");
+    documentoImprimirResumen(&matrizGlobal);
+
     if (total == 0)
     {
-        printf("No hay documentos clasificados todavia.\n");
+        printf("\nNo hay documentos clasificados todavia.\n");
         printf("=============================\n\n");
+        fflush(stdout);
         return;
     }
 
@@ -183,6 +222,45 @@ void mostrarResumenFinal(void)
     }
 
     printf("\n=============================\n\n");
+    fflush(stdout);
+}
+
+/* Construye la ruta de la carpeta "diccionarios" a partir de la
+   ubicacion del propio ejecutable (leyendo /proc/self/exe), en vez
+   de asumir que se ejecuta desde la raiz del proyecto. El binario
+   vive en bin/, y diccionarios/ vive un nivel arriba -- por eso el
+   sufijo es "/../diccionarios". Asi ialearner encuentra sus
+   diccionarios sin importar desde que carpeta lo ejecutes. */
+static int obtenerCarpetaDiccionariosPorDefecto(char *buffer, size_t tam)
+{
+    ssize_t n = readlink("/proc/self/exe", buffer, tam - 1);
+    char *ultimoSlash;
+    size_t dirLen;
+    const char *sufijo = "/../diccionarios";
+
+    if (n < 0)
+    {
+        return -1;
+    }
+
+    buffer[n] = '\0';
+
+    ultimoSlash = strrchr(buffer, '/');
+
+    if (!ultimoSlash)
+    {
+        return -1;
+    }
+
+    dirLen = (size_t)(ultimoSlash - buffer);
+
+    if (dirLen + strlen(sufijo) + 1 > tam)
+    {
+        return -1;
+    }
+
+    snprintf(buffer + dirLen, tam - dirLen, "%s", sufijo);
+    return 0;
 }
 
 static int crearSocketEscucha(const char *puerto)
@@ -239,12 +317,42 @@ static int crearSocketEscucha(const char *puerto)
 int main(int argc, char *argv[])
 {
     const char *puerto = PUERTO_DEFECTO;
+    const char *carpetaDiccionarios;
+    char carpetaResuelta[PATH_MAX];
     int servidor;
+
+    if (obtenerCarpetaDiccionariosPorDefecto(carpetaResuelta, sizeof(carpetaResuelta)) == 0)
+    {
+        carpetaDiccionarios = carpetaResuelta;
+    }
+    else
+    {
+        carpetaDiccionarios = CARPETA_DICCIONARIOS_DEFECTO;
+    }
 
     if (argc >= 2)
     {
         puerto = argv[1];
     }
+    if (argc >= 3)
+    {
+        /* Si el usuario indica la carpeta explicitamente, esa gana
+           sobre la ruta resuelta automaticamente. */
+        carpetaDiccionarios = argv[2];
+    }
+
+    /* Los diccionarios se cargan UNA sola vez aqui, ANTES de aceptar
+       cualquier conexion (todavia no existe ningun hilo). Por eso la
+       tabla hash de cada diccionario no necesita mutex: se termina
+       de escribir por completo antes de que el primer hilo pueda
+       siquiera empezar a leerla. */
+    if (cargarDiccionarios(carpetaDiccionarios) != 0)
+    {
+        fprintf(stderr, "No se pudieron cargar los diccionarios desde '%s'.\n", carpetaDiccionarios);
+        return EXIT_FAILURE;
+    }
+
+    documentoInicializar(&matrizGlobal);
 
     /* Si una ventana se desconecta justo cuando le intentamos enviar
        algo, el sistema manda SIGPIPE, que por defecto mata el
@@ -257,6 +365,7 @@ int main(int argc, char *argv[])
 
     if (servidor < 0)
     {
+        liberarDiccionarios();
         return EXIT_FAILURE;
     }
 
@@ -311,6 +420,8 @@ int main(int argc, char *argv[])
     }
 
     close(servidor);
+    documentoLiberar(&matrizGlobal);
+    liberarDiccionarios();
 
     return 0;
 }

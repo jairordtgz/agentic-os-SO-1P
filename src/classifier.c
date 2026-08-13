@@ -5,6 +5,19 @@
 
 #include "classifier.h"
 
+/* Los nombres de las 3 categorias son fijos: los define el propio
+   enunciado del proyecto (Correo, Articulo, Reporte), no algo que el
+   usuario deba poder cambiar. Por eso van aqui como constantes, y NO
+   se leen de los archivos .txt -- lo unico que viene de los .txt son
+   las PALABRAS de cada categoria, que es lo que el profesor pidio
+   sacar del codigo fuente. */
+static const char *NOMBRES_CATEGORIAS[NUM_DICCIONARIOS] =
+{
+    "Correo electronico",
+    "Articulo cientifico",
+    "Reporte"
+};
+
 /* ---- Tabla hash por diccionario ----
    Cada diccionario tiene su propia tabla hash: en vez de recorrer
    con un for las palabras una por una (busqueda O(n)) para saber si
@@ -13,8 +26,14 @@
    esa palabra deberia estar (busqueda O(1) en promedio). Como puede
    haber dos palabras distintas que caigan en el mismo cajon (una
    "colision"), cada cajon guarda una lista enlazada de las palabras
-   que cayeron ahi -- por eso cada nodo tiene un "siguiente". */
-#define TAMANO_TABLA_HASH 211
+   que cayeron ahi -- por eso cada nodo tiene un "siguiente".
+
+   El numero de cajones (TAMANO_TABLA_HASH) es fijo, pero eso NO limita
+   cuantas palabras puede tener un diccionario: solo afecta que tan
+   cortas quedan las listas de cada cajon. Con un numero generoso de
+   cajones, incluso diccionarios de varios cientos de palabras siguen
+   teniendo busquedas rapidas. */
+#define TAMANO_TABLA_HASH 4099
 #define LONGITUD_MAX_PALABRA 63
 
 typedef struct NodoHash
@@ -26,8 +45,7 @@ typedef struct NodoHash
 
 typedef struct
 {
-    char nombre[64];
-    int cantidadPalabras;
+    int cantidadPalabras;          /* SIN tope: crece con lo que traiga el archivo */
     NodoHash *tabla[TAMANO_TABLA_HASH];
 } Diccionario;
 
@@ -52,9 +70,8 @@ static int esSeparador(char c)
 /* Funcion hash tipo "djb2": recorre la palabra caracter por caracter
    y va combinando esos valores en un solo numero grande, de forma
    que palabras distintas casi siempre terminen en cajones distintos.
-   Es una funcion clasica, simple y con buena distribucion para
-   texto. El "% TAMANO_TABLA_HASH" al final asegura que el resultado
-   siempre caiga dentro del rango valido de la tabla. */
+   El "% TAMANO_TABLA_HASH" al final asegura que el resultado siempre
+   caiga dentro del rango valido de la tabla. */
 static unsigned int funcionHash(const char *palabra)
 {
     unsigned int hash = 5381;
@@ -96,9 +113,7 @@ static void hashInsertar(Diccionario *dic, const char *palabra, int indice)
 
 /* Busca "palabra" en el diccionario usando la tabla hash. Devuelve
    la posicion dentro del vector de frecuencias si la encuentra, o
-   -1 si no pertenece a este diccionario. En promedio es O(1): calcula
-   el cajon con funcionHash() y solo recorre la (corta) lista de ese
-   cajon, en vez de las MAX_PALABRAS palabras completas. */
+   -1 si no pertenece a este diccionario. En promedio es O(1). */
 static int buscarPalabra(const Diccionario *dic, const char palabra[])
 {
     unsigned int posicion = funcionHash(palabra);
@@ -117,9 +132,10 @@ static int buscarPalabra(const Diccionario *dic, const char palabra[])
     return -1;
 }
 
-/* Carga UN diccionario desde un archivo de texto. Formato esperado:
-   la primera linea es el nombre de la categoria (ej. "Reporte"), y
-   cada linea siguiente es una palabra del diccionario. */
+/* Carga UN diccionario desde un archivo de texto: una palabra por
+   linea, sin ningun encabezado ni nombre de categoria dentro del
+   archivo (los nombres de categoria son fijos, ver NOMBRES_CATEGORIAS
+   arriba). No hay tope de cuantas lineas puede tener el archivo. */
 static int cargarDiccionario(const char *ruta, Diccionario *dic)
 {
     FILE *archivo = fopen(ruta, "r");
@@ -131,20 +147,9 @@ static int cargarDiccionario(const char *ruta, Diccionario *dic)
         return -1;
     }
 
-    if (!fgets(linea, sizeof(linea), archivo))
-    {
-        fprintf(stderr, "El diccionario esta vacio: %s\n", ruta);
-        fclose(archivo);
-        return -1;
-    }
-
-    linea[strcspn(linea, "\n")] = '\0';
-    strncpy(dic->nombre, linea, sizeof(dic->nombre) - 1);
-    dic->nombre[sizeof(dic->nombre) - 1] = '\0';
-
     dic->cantidadPalabras = 0;
 
-    while (dic->cantidadPalabras < MAX_PALABRAS && fgets(linea, sizeof(linea), archivo))
+    while (fgets(linea, sizeof(linea), archivo))
     {
         linea[strcspn(linea, "\n")] = '\0';
 
@@ -159,32 +164,6 @@ static int cargarDiccionario(const char *ruta, Diccionario *dic)
     }
 
     fclose(archivo);
-
-    if (dic->cantidadPalabras == MAX_PALABRAS)
-    {
-        FILE *verificar = fopen(ruta, "r");
-        char sobrante[128];
-        int lineasLeidas = 0;
-
-        if (verificar)
-        {
-            while (fgets(sobrante, sizeof(sobrante), verificar))
-            {
-                lineasLeidas++;
-            }
-            fclose(verificar);
-
-            /* +1 por la linea del nombre de la categoria. */
-            if (lineasLeidas > MAX_PALABRAS + 1)
-            {
-                fprintf(stderr,
-                        "Aviso: %s tiene mas de %d palabras; las palabras extra "
-                        "se ignoraron. Aumenta MAX_PALABRAS en classifier.h si "
-                        "necesitas cargar mas.\n",
-                        ruta, MAX_PALABRAS);
-            }
-        }
-    }
 
     if (dic->cantidadPalabras == 0)
     {
@@ -219,9 +198,9 @@ int cargarDiccionarios(const char *carpeta)
     }
 
     printf("Diccionarios cargados: %s (%d palabras), %s (%d palabras), %s (%d palabras)\n",
-           diccionarios[EMAIL].nombre, diccionarios[EMAIL].cantidadPalabras,
-           diccionarios[ARTICULO].nombre, diccionarios[ARTICULO].cantidadPalabras,
-           diccionarios[REPORTE].nombre, diccionarios[REPORTE].cantidadPalabras);
+           NOMBRES_CATEGORIAS[EMAIL], diccionarios[EMAIL].cantidadPalabras,
+           NOMBRES_CATEGORIAS[ARTICULO], diccionarios[ARTICULO].cantidadPalabras,
+           NOMBRES_CATEGORIAS[REPORTE], diccionarios[REPORTE].cantidadPalabras);
 
     return 0;
 }
@@ -294,16 +273,32 @@ static void acumularVector(const char texto[], const Diccionario *dic, int vecto
     }
 }
 
+/* Reserva un vector de frecuencias por cada diccionario, del tamaño
+   EXACTO que tenga ese diccionario (diccionarios[i].cantidadPalabras).
+   Se usa calloc para que quede inicializado en ceros de una vez. */
 void documentoInicializar(DocumentoVentana *documento)
 {
-    int i, j;
+    int i;
 
     for (i = 0; i < NUM_DICCIONARIOS; i++)
     {
-        for (j = 0; j < MAX_PALABRAS; j++)
+        documento->vectores[i] = calloc((size_t)diccionarios[i].cantidadPalabras, sizeof(int));
+
+        if (!documento->vectores[i])
         {
-            documento->vectores[i][j] = 0;
+            fprintf(stderr, "Sin memoria para el vector de frecuencias.\n");
         }
+    }
+}
+
+void documentoLiberar(DocumentoVentana *documento)
+{
+    int i;
+
+    for (i = 0; i < NUM_DICCIONARIOS; i++)
+    {
+        free(documento->vectores[i]);
+        documento->vectores[i] = NULL;
     }
 }
 
@@ -313,16 +308,24 @@ void documentoAgregarLinea(DocumentoVentana *documento, char linea[])
 
     for (i = 0; i < NUM_DICCIONARIOS; i++)
     {
-        acumularVector(linea, &diccionarios[i], documento->vectores[i]);
+        if (documento->vectores[i] != NULL)
+        {
+            acumularVector(linea, &diccionarios[i], documento->vectores[i]);
+        }
     }
 }
 
-static int sumaVector(const int vector[])
+static int sumaVector(const int vector[], int cantidad)
 {
     int suma = 0;
     int i;
 
-    for (i = 0; i < MAX_PALABRAS; i++)
+    if (!vector)
+    {
+        return 0;
+    }
+
+    for (i = 0; i < cantidad; i++)
     {
         suma += vector[i];
     }
@@ -344,7 +347,7 @@ int documentoClasificar(const DocumentoVentana *documento)
 
     for (i = 0; i < NUM_DICCIONARIOS; i++)
     {
-        int frecuencia = sumaVector(documento->vectores[i]);
+        int frecuencia = sumaVector(documento->vectores[i], diccionarios[i].cantidadPalabras);
 
         if (frecuencia >= 3 && frecuencia > mayorFrecuencia)
         {
@@ -364,8 +367,8 @@ void documentoImprimirResumen(const DocumentoVentana *documento)
 
     for (i = 0; i < NUM_DICCIONARIOS; i++)
     {
-        suma = sumaVector(documento->vectores[i]);
-        printf("    %-20s total=%d\n", diccionarios[i].nombre, suma);
+        suma = sumaVector(documento->vectores[i], diccionarios[i].cantidadPalabras);
+        printf("    %-20s total=%d\n", NOMBRES_CATEGORIAS[i], suma);
     }
 }
 
@@ -376,5 +379,5 @@ const char *nombreClase(int tipo)
         return "Documento desconocido";
     }
 
-    return diccionarios[tipo].nombre;
+    return NOMBRES_CATEGORIAS[tipo];
 }
