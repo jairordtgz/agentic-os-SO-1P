@@ -255,6 +255,26 @@ static int leerLinea(char *buffer, size_t tam)
     return 0;
 }
 
+/* Lee una linea de texto; si el usuario deja la entrada vacia
+   (solo presiona Enter), se usa "porDefecto" en su lugar. Se usa
+   para pedir el host/puerto de la "computadora remota" a la que se
+   conectara un lote de ventanas, sin obligar a escribirlo cada vez. */
+static void leerTexto(const char *mensaje, const char *porDefecto, char *destino, size_t tam)
+{
+    char linea[128];
+
+    printf("%s", mensaje);
+    fflush(stdout);
+
+    if (leerLinea(linea, sizeof(linea)) != 0 || linea[0] == '\0')
+    {
+        snprintf(destino, tam, "%s", porDefecto);
+        return;
+    }
+
+    snprintf(destino, tam, "%s", linea);
+}
+
 /* Pide un numero entero dentro de [minimo, maximo], repitiendo la
    pregunta mientras la entrada no sea valida. Devuelve -1 si la
    entrada se cerro (por ejemplo con Ctrl+D). */
@@ -366,19 +386,40 @@ void mostrarMenu(const char *host, const char *puerto)
         switch (opcion)
         {
             case 1:
+            {
                 /* Sin tope maximo propio: solo INT_MAX como limite
                    tecnico del tipo "int", no una regla de negocio. */
+                char hostLote[128];
+                char puertoLote[16];
+
                 cantidad = leerEnteroPositivo("Cantidad de ventanas: ", 1, INT_MAX);
 
-                if (cantidad > 0 && confirmarCantidadGrande(cantidad))
+                if (cantidad <= 0)
                 {
-                    crearVentanas(cantidad, host, puerto);
+                    break;
                 }
-                else if (cantidad > 0)
+
+                /* Cada lote de ventanas puede apuntar a una
+                   "computadora remota" distinta (un ialearner en
+                   otro puerto, simulando otra maquina) -- si el
+                   usuario solo presiona Enter, se usa el host/puerto
+                   por defecto de esta sesion del launcher. */
+                leerTexto("Host de la computadora remota [Enter para usar el de por defecto]: ",
+                          host, hostLote, sizeof(hostLote));
+                leerTexto("Puerto de la computadora remota [Enter para usar el de por defecto]: ",
+                          puerto, puertoLote, sizeof(puertoLote));
+
+                if (confirmarCantidadGrande(cantidad))
+                {
+                    printf("Creando %d ventana(s) hacia %s:%s...\n", cantidad, hostLote, puertoLote);
+                    crearVentanas(cantidad, hostLote, puertoLote);
+                }
+                else
                 {
                     printf("Operacion cancelada.\n");
                 }
                 break;
+            }
 
             case 2:
                 revisarProcesosTerminados();

@@ -9,17 +9,14 @@ extern int documentosArticulo;
 extern int documentosReporte;
 extern int clientesConectados;
 
-/* Matriz de frecuencias GLOBAL: a diferencia del "documento" que
-   cada hilo arma para SU ventana (que es local y no necesita mutex),
-   esta si es una sola copia compartida por TODOS los hilos, que se
-   va incrementando en tiempo real conforme cada hilo encuentra
-   palabras en cualquier ventana. Por eso toda escritura sobre esta
-   variable debe hacerse con el mutex tomado. */
+/* Matriz de frecuencias GLOBAL: todos los hilos de deteccion escriben
+   aqui conforme procesan oraciones (de cualquier ventana). Es la
+   unica pieza de este tipo que de verdad comparten -- por eso, y
+   solo por eso, se protege con mutex. */
 extern DocumentoVentana matrizGlobal;
 
 extern pthread_mutex_t mutex;
 
-void actualizarResumen(int tipo);
 void mostrarResumenFinal(void);
 
 void *atenderCliente(void *arg);
