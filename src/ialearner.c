@@ -411,9 +411,18 @@ static void *hiloDeteccion(void *arg)
         miNodo = loteActual[miIndice];
         pthread_mutex_unlock(&mutexLote);
 
+	printf("[deteccion %d] procesando oracion de ventana %d (lote generacion %ld)\n",
+               miIndice, miNodo->idVentana, miUltimaGeneracion);
+        fflush(stdout);
+
         /* Trabajo real, EN PARALELO con los otros P-1 hilos: cada uno
            toca SOLO su propio "miNodo" en este punto, sin mutex. */
         procesarOracion(miNodo->idVentana, miNodo->texto);
+
+	printf("[deteccion %d] termino de procesar la oracion de ventana %d\n",
+               miIndice, miNodo->idVentana);
+        fflush(stdout);
+
         free(miNodo);
 
         pthread_mutex_lock(&mutexLote);
