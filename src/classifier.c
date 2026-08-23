@@ -36,18 +36,15 @@ typedef struct
 
 static Diccionario diccionarios[NUM_DICCIONARIOS];
 
-static void convertirMinusculas(char texto[])
-{
+static void convertirMinusculas(char texto[]){
     int i;
 
-    for (i = 0; texto[i] != '\0'; i++)
-    {
+    for (i = 0; texto[i] != '\0'; i++) {
         texto[i] = (char)tolower((unsigned char)texto[i]);
     }
 }
 
-static int esSeparador(char c)
-{
+static int esSeparador(char c){
     return c == ' ' || c == '\n' || c == '\r' || c == '\t' ||
            c == ',' || c == '.' || c == ';' || c == ':';
 }
@@ -57,13 +54,11 @@ static int esSeparador(char c)
    que palabras distintas casi siempre terminen en cajones distintos.
    El "% TAMANO_TABLA_HASH" asegura que el resultado siempre
    caiga dentro del rango valido de la tabla. */
-static unsigned int funcionHash(const char *palabra)
-{
+static unsigned int funcionHash(const char *palabra){
     unsigned int hash = 5381;
     int c;
 
-    while ((c = (unsigned char)*palabra++) != '\0')
-    {
+    while ((c = (unsigned char)*palabra++) != '\0') {
         hash = ((hash << 5) + hash) + (unsigned int)c;
     }
 
@@ -73,13 +68,11 @@ static unsigned int funcionHash(const char *palabra)
 /* Inserta "palabra" en la tabla hash del diccionario, en la posicion
    de vector "indice". Se usa SOLO durante la carga inicial, antes de
    crear ningun hilo */
-static void hashInsertar(Diccionario *dic, const char *palabra, int indice)
-{
+static void hashInsertar(Diccionario *dic, const char *palabra, int indice){
     unsigned int posicion = funcionHash(palabra);
     NodoHash *nodo = malloc(sizeof(NodoHash));
 
-    if (!nodo)
-    {
+    if (!nodo) {
         fprintf(stderr, "Sin memoria para cargar el diccionario.\n");
         return;
     }
@@ -96,45 +89,35 @@ static void hashInsertar(Diccionario *dic, const char *palabra, int indice)
 /* Busca "palabra" en el diccionario usando la tabla hash. Devuelve
    la posicion dentro del vector de frecuencias si la encuentra, o
    -1 si no pertenece a este diccionario */
-static int buscarPalabra(const Diccionario *dic, const char palabra[])
-{
+static int buscarPalabra(const Diccionario *dic, const char palabra[]){
     unsigned int posicion = funcionHash(palabra);
     NodoHash *nodo = dic->tabla[posicion];
 
-    while (nodo != NULL)
-    {
-        if (strcmp(nodo->palabra, palabra) == 0)
-        {
+    while (nodo != NULL){
+        if (strcmp(nodo->palabra, palabra) == 0){
             return nodo->indice;
         }
-
         nodo = nodo->siguiente;
     }
-
     return -1;
 }
 
 /* Carga UN diccionario desde un archivo de texto: una palabra por
    linea */
-static int cargarDiccionario(const char *ruta, Diccionario *dic)
-{
+static int cargarDiccionario(const char *ruta, Diccionario *dic){
     FILE *archivo = fopen(ruta, "r");
     char linea[128];
 
-    if (!archivo)
-    {
+    if (!archivo){
         fprintf(stderr, "No se pudo abrir el diccionario: %s\n", ruta);
         return -1;
     }
 
     dic->cantidadPalabras = 0;
 
-    while (fgets(linea, sizeof(linea), archivo))
-    {
+    while (fgets(linea, sizeof(linea), archivo)){
         linea[strcspn(linea, "\n")] = '\0';
-
-        if (linea[0] == '\0')
-        {
+        if (linea[0] == '\0'){
             continue;
         }
 
@@ -145,8 +128,7 @@ static int cargarDiccionario(const char *ruta, Diccionario *dic)
 
     fclose(archivo);
 
-    if (dic->cantidadPalabras == 0)
-    {
+    if (dic->cantidadPalabras == 0){
         fprintf(stderr, "El diccionario no tiene ninguna palabra: %s\n", ruta);
         return -1;
     }
@@ -154,8 +136,7 @@ static int cargarDiccionario(const char *ruta, Diccionario *dic)
     return 0;
 }
 
-int cargarDiccionarios(const char *carpeta)
-{
+int cargarDiccionarios(const char *carpeta){
     char rutaCorreo[256];
     char rutaArticulo[256];
     char rutaReporte[256];
@@ -164,16 +145,13 @@ int cargarDiccionarios(const char *carpeta)
     snprintf(rutaArticulo, sizeof(rutaArticulo), "%s/articulo.txt", carpeta);
     snprintf(rutaReporte, sizeof(rutaReporte), "%s/reporte.txt", carpeta);
 
-    if (cargarDiccionario(rutaCorreo, &diccionarios[EMAIL]) != 0)
-    {
+    if (cargarDiccionario(rutaCorreo, &diccionarios[EMAIL]) != 0){
         return -1;
     }
-    if (cargarDiccionario(rutaArticulo, &diccionarios[ARTICULO]) != 0)
-    {
+    if (cargarDiccionario(rutaArticulo, &diccionarios[ARTICULO]) != 0){
         return -1;
     }
-    if (cargarDiccionario(rutaReporte, &diccionarios[REPORTE]) != 0)
-    {
+    if (cargarDiccionario(rutaReporte, &diccionarios[REPORTE]) != 0){
         return -1;
     }
 
@@ -185,8 +163,7 @@ int cargarDiccionarios(const char *carpeta)
     return 0;
 }
 
-void liberarDiccionarios(void)
-{
+void liberarDiccionarios(void){
     int i, j;
 
     for (i = 0; i < NUM_DICCIONARIOS; i++)
@@ -209,8 +186,7 @@ void liberarDiccionarios(void)
 
 /* Suma dentro de "vector", las frecuencias de las palabras de
    "texto" que aparecen en el diccionario "dic" */
-static void acumularVector(const char texto[], const Diccionario *dic, int vector[])
-{
+static void acumularVector(const char texto[], const Diccionario *dic, int vector[]){
     char copia[1024];
     char palabra[100];
     int indice = 0;
@@ -227,25 +203,21 @@ static void acumularVector(const char texto[], const Diccionario *dic, int vecto
     {
         char c = copia[i];
 
-        if (esSeparador(c) || c == '\0')
-        {
-            if (indice > 0)
-            {
+        if (esSeparador(c) || c == '\0'){
+            if (indice > 0){
                 int posicion;
 
                 palabra[indice] = '\0';
                 posicion = buscarPalabra(dic, palabra);
 
-                if (posicion != -1)
-                {
+                if (posicion != -1){
                     vector[posicion]++;
                 }
 
                 indice = 0;
             }
         }
-        else if (indice < (int)sizeof(palabra) - 1)
-        {
+        else if (indice < (int)sizeof(palabra) - 1){
             palabra[indice++] = c;
         }
     }
@@ -253,14 +225,12 @@ static void acumularVector(const char texto[], const Diccionario *dic, int vecto
 
 /* Reserva un vector de frecuencias por cada diccionario, del tamaño
    EXACTO que tenga ese diccionario. */
-void documentoInicializar(DocumentoVentana *documento)
-{
+void documentoInicializar(DocumentoVentana *documento){
     int i;
 
     for (i = 0; i < NUM_DICCIONARIOS; i++)
     {
         documento->vectores[i] = calloc((size_t)diccionarios[i].cantidadPalabras, sizeof(int));
-
         if (!documento->vectores[i])
         {
             fprintf(stderr, "Sin memoria para el vector de frecuencias.\n");
@@ -268,60 +238,48 @@ void documentoInicializar(DocumentoVentana *documento)
     }
 }
 
-void documentoLiberar(DocumentoVentana *documento)
-{
+void documentoLiberar(DocumentoVentana *documento){
     int i;
-
-    for (i = 0; i < NUM_DICCIONARIOS; i++)
-    {
+    for (i = 0; i < NUM_DICCIONARIOS; i++) {
         free(documento->vectores[i]);
         documento->vectores[i] = NULL;
     }
 }
 
-void documentoAgregarLinea(DocumentoVentana *documento, char linea[])
-{
+void documentoAgregarLinea(DocumentoVentana *documento, char linea[]){
     int i;
 
-    for (i = 0; i < NUM_DICCIONARIOS; i++)
-    {
-        if (documento->vectores[i] != NULL)
-        {
+    for (i = 0; i < NUM_DICCIONARIOS; i++){
+        if (documento->vectores[i] != NULL){
             acumularVector(linea, &diccionarios[i], documento->vectores[i]);
         }
     }
 }
 
-static int sumaVector(const int vector[], int cantidad)
-{
+static int sumaVector(const int vector[], int cantidad){
     int suma = 0;
     int i;
 
-    if (!vector)
-    {
+    if (!vector){
         return 0;
     }
 
-    for (i = 0; i < cantidad; i++)
-    {
+    for (i = 0; i < cantidad; i++){
         suma += vector[i];
     }
 
     return suma;
 }
 
-int documentoClasificar(const DocumentoVentana *documento)
-{
+int documentoClasificar(const DocumentoVentana *documento){
     int mejorTipo = DESCONOCIDO;
     int mayorFrecuencia = 0;
     int i;
 
-    for (i = 0; i < NUM_DICCIONARIOS; i++)
-    {
+    for (i = 0; i < NUM_DICCIONARIOS; i++){
         int frecuencia = sumaVector(documento->vectores[i], diccionarios[i].cantidadPalabras);
 
-        if (frecuencia >= 3 && frecuencia > mayorFrecuencia)
-        {
+        if (frecuencia >= 3 && frecuencia > mayorFrecuencia){
             mayorFrecuencia = frecuencia;
             mejorTipo = i;
         }
@@ -330,23 +288,19 @@ int documentoClasificar(const DocumentoVentana *documento)
     return mejorTipo;
 }
 
-void documentoImprimirResumen(const DocumentoVentana *documento)
-{
+void documentoImprimirResumen(const DocumentoVentana *documento){
     int i, suma;
 
     printf("  Frecuencias acumuladas por diccionario:\n");
 
-    for (i = 0; i < NUM_DICCIONARIOS; i++)
-    {
+    for (i = 0; i < NUM_DICCIONARIOS; i++){
         suma = sumaVector(documento->vectores[i], diccionarios[i].cantidadPalabras);
         printf("    %-20s total=%d\n", NOMBRES_CATEGORIAS[i], suma);
     }
 }
 
-const char *nombreClase(int tipo)
-{
-    if (tipo == DESCONOCIDO)
-    {
+const char *nombreClase(int tipo){
+    if (tipo == DESCONOCIDO){
         return "Documento desconocido";
     }
 

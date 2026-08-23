@@ -24,12 +24,10 @@ static int P;  /* cantidad de hilos de deteccion, parametro -p / --hilos */
 
 /* Detecta cuantos nucleos de CPU tiene la compu en tiempo de
    ejecucion.*/
-static int detectarCantidadCPUs(void)
-{
+static int detectarCantidadCPUs(void){
     long n = sysconf(_SC_NPROCESSORS_ONLN);
 
-    if (n < 1)
-    {
+    if (n < 1){
         return 1;
     }
 
@@ -37,16 +35,14 @@ static int detectarCantidadCPUs(void)
 }
 
 /* Reparte los P hilos de deteccion entre los CPUs disponibles  */
-static void asignarCPU(pthread_t hilo, int indiceHilo)
-{
+static void asignarCPU(pthread_t hilo, int indiceHilo){
     cpu_set_t conjunto;
     int cpuAsignado = indiceHilo % cantidadCPUs;
 
     CPU_ZERO(&conjunto);
     CPU_SET(cpuAsignado, &conjunto);
 
-    if (pthread_setaffinity_np(hilo, sizeof(conjunto), &conjunto) != 0)
-    {
+    if (pthread_setaffinity_np(hilo, sizeof(conjunto), &conjunto) != 0){
         fprintf(stderr, "Aviso: no se pudo fijar el hilo %d al CPU %d.\n", indiceHilo, cpuAsignado);
     }
 }
@@ -87,17 +83,14 @@ static pthread_mutex_t mutexLaunchers = PTHREAD_MUTEX_INITIALIZER;
 /* Busca el registro de "idLauncher"; si no existe todavia (es la
    primera vez que se conecta una ventana de ese launcher), lo crea
    con su propio contexto vacio. */
-static RegistroLauncher *buscarOCrearLauncher(int idLauncher)
-{
+static RegistroLauncher *buscarOCrearLauncher(int idLauncher){
+
     int i;
     RegistroLauncher *nuevo;
-
     pthread_mutex_lock(&mutexLaunchers);
 
-    for (i = 0; i < totalLaunchers; i++)
-    {
-        if (launchers[i]->idLauncher == idLauncher)
-        {
+    for (i = 0; i < totalLaunchers; i++){
+        if (launchers[i]->idLauncher == idLauncher){
             pthread_mutex_unlock(&mutexLaunchers);
             return launchers[i];
         }
@@ -105,8 +98,7 @@ static RegistroLauncher *buscarOCrearLauncher(int idLauncher)
 
     nuevo = malloc(sizeof(RegistroLauncher));
 
-    if (!nuevo)
-    {
+    if (!nuevo){
         pthread_mutex_unlock(&mutexLaunchers);
         fprintf(stderr, "Sin memoria para registrar el launcher %d.\n", idLauncher);
         return NULL;
@@ -124,13 +116,11 @@ static RegistroLauncher *buscarOCrearLauncher(int idLauncher)
     documentoInicializar(&nuevo->matrizGlobal);
     nuevo->ultimoTipoUsuarioImpreso = -1;
 
-    if (totalLaunchers == capacidadLaunchers)
-    {
+    if (totalLaunchers == capacidadLaunchers){
         int nuevaCapacidad = (capacidadLaunchers == 0) ? 4 : capacidadLaunchers * 2;
         RegistroLauncher **nuevoArreglo = realloc(launchers, sizeof(RegistroLauncher *) * (size_t)nuevaCapacidad);
 
-        if (!nuevoArreglo)
-        {
+        if (!nuevoArreglo){
             pthread_mutex_unlock(&mutexLaunchers);
             fprintf(stderr, "Sin memoria para registrar el launcher %d.\n", idLauncher);
             free(nuevo);
@@ -153,25 +143,20 @@ static RegistroLauncher *buscarOCrearLauncher(int idLauncher)
 }
 
 /* Busca el registro de "idVentana" de un launcher especifico */
-static RegistroVentana *buscarOCrearRegistroVentana(RegistroLauncher *rl, int idVentana)
-{
+static RegistroVentana *buscarOCrearRegistroVentana(RegistroLauncher *rl, int idVentana){
     int i;
 
-    for (i = 0; i < rl->totalVentanas; i++)
-    {
-        if (rl->ventanas[i].idVentana == idVentana)
-        {
+    for (i = 0; i < rl->totalVentanas; i++){
+        if (rl->ventanas[i].idVentana == idVentana){
             return &rl->ventanas[i];
         }
     }
 
-    if (rl->totalVentanas == rl->capacidadVentanas)
-    {
+    if (rl->totalVentanas == rl->capacidadVentanas){
         int nuevaCapacidad = (rl->capacidadVentanas == 0) ? 8 : rl->capacidadVentanas * 2;
         RegistroVentana *nuevo = realloc(rl->ventanas, sizeof(RegistroVentana) * (size_t)nuevaCapacidad);
 
-        if (!nuevo)
-        {
+        if (!nuevo){
             fprintf(stderr, "Sin memoria para registrar la ventana %d.\n", idVentana);
             return NULL;
         }

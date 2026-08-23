@@ -20,10 +20,7 @@ typedef struct
 } DocumentoVentana;
 
 /* Carga los 3 diccionarios desde archivos de texto dentro de
-  la carpeta diccionarios (correo.txt, articulo.txt, reporte.txt). Construye
-   una tabla hash por diccionario para que buscar si una
-   palabra pertenece a el sea O(1) en promedio, sin importar cuantas
-   palabras tenga.
+  la carpeta diccionarios (correo.txt, articulo.txt, reporte.txt)
 
 */
 int cargarDiccionarios(const char *carpeta);
@@ -33,8 +30,8 @@ void liberarDiccionarios(void);
 
 /* documentoInicializar reserva memoria (calloc) para el vector de
    cada diccionario, del tamaño exacto que se cargo en cargarDiccionarios.
-   documentoLiberar la libera -- se debe llamar por cada DocumentoVentana
-   que ya no se vaya a usar (por ejemplo, al cerrar una ventana) */
+   documentoLiberar la libera  */
+
 void documentoInicializar(DocumentoVentana *documento);
 void documentoLiberar(DocumentoVentana *documento);
 
