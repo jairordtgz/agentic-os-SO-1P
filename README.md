@@ -38,10 +38,6 @@ make clean
   indica, se usa por defecto la cantidad de CPUs detectados en la compu o laptop.
 - `puerto` — puerto TCP donde escucha. Por defecto `5000`.
 
-
-Al arrancar muestra algo como:
-
-
 ### 2. Ejecutar uno o más launcher para simular dispositivos
 
 En otra terminal:
