@@ -376,8 +376,6 @@ void mostrarMenu(const char *host, const char *puerto)
         return;
     }
 
-    printf("Las ventanas se conectaran a IALearner en %s:%s\n", host, puerto);
-
     while (!salir)
     {
         if (huboProcesoTerminado)

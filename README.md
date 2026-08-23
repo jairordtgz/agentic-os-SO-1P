@@ -47,28 +47,18 @@ Al arrancar muestra algo como:
 En otra terminal:
 
 ```bash
-./launcher [host] [puerto]
-```
-
-`host` y `puerto` son los valores **por defecto** que se sugieren al
-crear ventanas (se pueden dejar en blanco con Enter en el menú para
-usarlos, o escribir otros distintos para simular otra "computadora",
-si hay otro `ialearner` corriendo en otro puerto).
-
-```bash
-./launcher                      # se conecta por defecto a 127.0.0.1:5000
-./launcher 127.0.0.1 6000       # se conecta por otro puerto
+./launcher
 ```
 
 Desde el menú del launcher:
 1. Crear ventanas
 2. Ver estado de procesos
 3. Terminar todas las ventanas activas
-4. Salir
+0. Salir
 
 Al elegir "1", se pide la cantidad de ventanas y, para cada lote, el
-host/puerto de la "computadora remota" (Enter para usar el de por
-defecto)
+host/puerto del servidor ialearner (se debe presionar enter para el host
+y puerto por default o poner el puerto ingresado en ./ialearner
 
 Cada **launcher** representa una computadora/usuario independiente.
 Se pueden correr varios launchers (en varias terminales) apuntando al
