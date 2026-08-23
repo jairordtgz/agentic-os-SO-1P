@@ -1,24 +1,13 @@
 #ifndef IALEARNER_H
 #define IALEARNER_H
 
-#include <pthread.h>
-#include "classifier.h"
-
-extern int documentosCorreo;
-extern int documentosArticulo;
-extern int documentosReporte;
-extern int clientesConectados;
-
-/* Matriz de frecuencias GLOBAL: todos los hilos de deteccion escriben
-   aqui conforme procesan oraciones (de cualquier ventana). Es la
-   unica pieza de este tipo que de verdad comparten -- por eso, y
-   solo por eso, se protege con mutex. */
-extern DocumentoVentana matrizGlobal;
-
-extern pthread_mutex_t mutex;
+/* Nada de este archivo lo consume otro .c del proyecto (solo lo
+   incluye ialearner.c a si mismo) -- por eso el header se mantiene
+   minimo: casi todo el estado (contadores, matrices, registros por
+   launcher) es privado (static) dentro de ialearner.c, protegido con
+   sus propios mutex internos. */
 
 void mostrarResumenFinal(void);
-
 void *atenderCliente(void *arg);
 
 #endif

@@ -128,14 +128,16 @@ int main(int argc, char *argv[])
 {
     const char *host = SERVER_IP_DEFECTO;
     const char *puerto = SERVER_PORT_DEFECTO;
+    int idVentana = 0;   /* 0 = "sin id asignado" (por ejemplo, si se corre a mano sin el launcher) */
+    int idLauncher = 0;  /* 0 = "sin launcher identificado" */
     int socketServidor;
     Display *display;
     Window window;
     Atom wmDelete;
 
-    /* El launcher pasa host y puerto como argumentos. Si se ejecuta
-       "window" a mano sin argumentos, se usan los valores por
-       defecto (solo para pruebas locales). */
+    /* El launcher pasa host, puerto, idVentana e idLauncher como
+       argumentos. Si se ejecuta "window" a mano sin argumentos, se
+       usan los valores por defecto (solo para pruebas locales). */
     if (argc >= 2)
     {
         host = argv[1];
@@ -144,6 +146,14 @@ int main(int argc, char *argv[])
     {
         puerto = argv[2];
     }
+    if (argc >= 4)
+    {
+        idVentana = atoi(argv[3]);
+    }
+    if (argc >= 5)
+    {
+        idLauncher = atoi(argv[4]);
+    }
 
     socketServidor = conectarServidor(host, puerto);
 
@@ -151,6 +161,22 @@ int main(int argc, char *argv[])
     {
         fprintf(stderr, "No se pudo conectar a IALearner en %s:%s\n", host, puerto);
         return EXIT_FAILURE;
+    }
+
+    /* Linea de identificacion ("verificador"): se manda ANTES que
+       cualquier tecla, con AMBOS ids -- el de la ventana y el del
+       launcher que la creo. Asi ialearner sabe no solo de que
+       ventana viene cada oracion, sino tambien a que "computadora"
+       (launcher) pertenece, para mantener cada contexto separado. */
+    {
+        char identificacion[64];
+        int longitud = snprintf(identificacion, sizeof(identificacion),
+                                 "VENTANA %d LAUNCHER %d\n", idVentana, idLauncher);
+
+        if (longitud > 0 && send(socketServidor, identificacion, (size_t)longitud, 0) < 0)
+        {
+            perror("send (identificacion)");
+        }
     }
 
     display = iniciarDisplay();

@@ -183,6 +183,12 @@ static int obtenerRutaWindow(char *buffer, size_t tam)
 static void crearVentana(int idVentana, const char *rutaWindow,
                           const char *host, const char *puerto)
 {
+    /* getpid() se llama AQUI, antes del fork -- en este punto todavia
+       estamos en el proceso del launcher, asi que devuelve el PID del
+       launcher. Si se llamara despues del fork, dentro de la rama del
+       hijo (pid == 0), devolveria el PID del HIJO, no el del launcher
+       -- por eso se captura antes y se reutiliza el valor ya guardado. */
+    pid_t idLauncher = getpid();
     pid_t pid = fork();
 
     if (pid < 0)
@@ -193,6 +199,9 @@ static void crearVentana(int idVentana, const char *rutaWindow,
 
     if (pid == 0)
     {
+        char idVentanaStr[16];
+        char idLauncherStr[16];
+
         /* Cada ventana pasa a formar su propio grupo de procesos.
            Sin esto, heredaria el mismo grupo que el launcher y la
            terminal, y un Ctrl+C hecho en la terminal del launcher
@@ -200,7 +209,17 @@ static void crearVentana(int idVentana, const char *rutaWindow,
            cerrandolas todas de golpe en vez de solo al launcher. */
         setpgid(0, 0);
 
-        execl(rutaWindow, "window", host, puerto, (char *)NULL);
+        /* Se le pasan idVentana e idLauncher como argumentos para que
+           window.c pueda identificarse ante ialearner con los MISMOS
+           numeros que el usuario ve aqui en el launcher -- asi ambos
+           lados de la conexion se pueden correlacionar, y ialearner
+           puede mantener el contexto de este launcher (esta
+           "computadora") separado del de cualquier otro launcher que
+           tambien este conectado. */
+        snprintf(idVentanaStr, sizeof(idVentanaStr), "%d", idVentana);
+        snprintf(idLauncherStr, sizeof(idLauncherStr), "%d", (int)idLauncher);
+
+        execl(rutaWindow, "window", host, puerto, idVentanaStr, idLauncherStr, (char *)NULL);
 
         /* Si execl regresa, es porque fallo. */
         fprintf(stderr, "Error ejecutando window: %s\n", strerror(errno));

@@ -23,21 +23,6 @@
 #define CARPETA_DICCIONARIOS_DEFECTO "diccionarios"
 #define TAMANO_BUFFER 1024
 
-int documentosCorreo = 0;
-int documentosArticulo = 0;
-int documentosReporte = 0;
-int clientesConectados = 0;
-
-DocumentoVentana matrizGlobal;
-
-/* Mutex "general": protege documentosCorreo/Articulo/Reporte,
-   clientesConectados, matrizGlobal y el ultimo tipo de usuario
-   impreso. Es intencional reusar un solo mutex para estas variables:
-   siempre se leen/escriben juntas y las secciones son muy cortas, asi
-   que separar en mas mutexes aqui no reduciria contencion real, solo
-   agregaria complejidad. */
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-
 /* ================================================================
    Deteccion del entorno: CPUs y tamaño del pool de hilos (P)
    ================================================================ */
@@ -46,29 +31,21 @@ static int cantidadCPUs;
 static int P;  /* cantidad de hilos de deteccion, parametro -p / --hilos */
 
 /* Detecta cuantos nucleos de CPU tiene ESTA maquina en tiempo de
-   ejecucion. Nunca se recibe como parametro -- se pide asi en el
-   enunciado, porque cada "computador" (simulado con un puerto
-   distinto) puede tener una cantidad de CPUs distinta, y el programa
-   debe adaptarse solo a la maquina donde corre. */
+   ejecucion. Nunca se recibe como parametro. */
 static int detectarCantidadCPUs(void)
 {
     long n = sysconf(_SC_NPROCESSORS_ONLN);
 
     if (n < 1)
     {
-        return 1;  /* respaldo defensivo, casi nunca deberia pasar */
+        return 1;
     }
 
     return (int)n;
 }
 
-/* Fija el hilo "hilo" a un CPU especifico, repartiendo los P hilos de
-   deteccion entre los CPUs disponibles en "round robin" (hilo 0 -> CPU 0,
-   hilo 1 -> CPU 1, ..., y si hay mas hilos que CPUs, se reparte en
-   vueltas). Esto es el balanceo de carga del requerimiento 7a: en vez
-   de dejar que el planificador del sistema operativo decida sin
-   ninguna guia, se distribuyen explicitamente los hilos que SI hacen
-   trabajo pesado (el algoritmo de deteccion) entre todos los nucleos. */
+/* Reparte los P hilos de deteccion entre los CPUs disponibles en
+   "round robin" (balanceo de carga, requerimiento 7a). */
 static void asignarCPU(pthread_t hilo, int indiceHilo)
 {
     cpu_set_t conjunto;
@@ -84,12 +61,169 @@ static void asignarCPU(pthread_t hilo, int indiceHilo)
 }
 
 /* ================================================================
+   Registro por VENTANA (documento acumulado de una ventana especifica)
+   ================================================================ */
+
+typedef struct
+{
+    int idVentana;
+    DocumentoVentana documento;
+    int clasificacionActual;  /* EMAIL / ARTICULO / REPORTE / DESCONOCIDO */
+} RegistroVentana;
+
+/* ================================================================
+   Registro por LAUNCHER (= una "computadora"/usuario independiente).
+   Cada launcher que se conecta tiene su PROPIO contexto completo:
+   sus propias ventanas, sus propios contadores, su propia matriz
+   global y su propia decision de tipo de usuario -- nada de esto se
+   mezcla entre launchers distintos, tal como se aclaro en clase. */
+typedef struct
+{
+    int idLauncher;
+
+    pthread_mutex_t mutexVentanas;   /* protege "ventanas" de ESTE launcher */
+    RegistroVentana *ventanas;
+    int totalVentanas;
+    int capacidadVentanas;
+
+    pthread_mutex_t mutexContadores; /* protege lo de abajo, de ESTE launcher */
+    int documentosCorreo;
+    int documentosArticulo;
+    int documentosReporte;
+    DocumentoVentana matrizGlobal;
+    int ultimoTipoUsuarioImpreso;
+} RegistroLauncher;
+
+/* Arreglo de PUNTEROS, no de structs por valor: cada RegistroLauncher
+   se reserva una sola vez con malloc y JAMAS se mueve de direccion.
+   Si fuera un arreglo de structs por valor, hacer crecer el arreglo
+   con realloc podria reubicar en memoria un mutex que otro hilo tiene
+   tomado en ese preciso instante -- eso es comportamiento indefinido.
+   Con punteros, lo unico que realloc mueve es la lista de direcciones,
+   nunca el contenido real de cada RegistroLauncher. */
+static RegistroLauncher **launchers = NULL;
+static int totalLaunchers = 0;
+static int capacidadLaunchers = 0;
+static pthread_mutex_t mutexLaunchers = PTHREAD_MUTEX_INITIALIZER;
+
+/* Busca el registro de "idLauncher"; si no existe todavia (es la
+   primera vez que se conecta una ventana de ese launcher), lo crea
+   con su propio contexto vacio. */
+static RegistroLauncher *buscarOCrearLauncher(int idLauncher)
+{
+    int i;
+    RegistroLauncher *nuevo;
+
+    pthread_mutex_lock(&mutexLaunchers);
+
+    for (i = 0; i < totalLaunchers; i++)
+    {
+        if (launchers[i]->idLauncher == idLauncher)
+        {
+            pthread_mutex_unlock(&mutexLaunchers);
+            return launchers[i];
+        }
+    }
+
+    nuevo = malloc(sizeof(RegistroLauncher));
+
+    if (!nuevo)
+    {
+        pthread_mutex_unlock(&mutexLaunchers);
+        fprintf(stderr, "Sin memoria para registrar el launcher %d.\n", idLauncher);
+        return NULL;
+    }
+
+    nuevo->idLauncher = idLauncher;
+    pthread_mutex_init(&nuevo->mutexVentanas, NULL);
+    nuevo->ventanas = NULL;
+    nuevo->totalVentanas = 0;
+    nuevo->capacidadVentanas = 0;
+    pthread_mutex_init(&nuevo->mutexContadores, NULL);
+    nuevo->documentosCorreo = 0;
+    nuevo->documentosArticulo = 0;
+    nuevo->documentosReporte = 0;
+    documentoInicializar(&nuevo->matrizGlobal);
+    nuevo->ultimoTipoUsuarioImpreso = -1;
+
+    if (totalLaunchers == capacidadLaunchers)
+    {
+        int nuevaCapacidad = (capacidadLaunchers == 0) ? 4 : capacidadLaunchers * 2;
+        RegistroLauncher **nuevoArreglo = realloc(launchers, sizeof(RegistroLauncher *) * (size_t)nuevaCapacidad);
+
+        if (!nuevoArreglo)
+        {
+            pthread_mutex_unlock(&mutexLaunchers);
+            fprintf(stderr, "Sin memoria para registrar el launcher %d.\n", idLauncher);
+            free(nuevo);
+            return NULL;
+        }
+
+        launchers = nuevoArreglo;
+        capacidadLaunchers = nuevaCapacidad;
+    }
+
+    launchers[totalLaunchers] = nuevo;
+    totalLaunchers++;
+
+    printf("Nuevo launcher registrado: id %d (contexto independiente).\n", idLauncher);
+    fflush(stdout);
+
+    pthread_mutex_unlock(&mutexLaunchers);
+
+    return nuevo;
+}
+
+/* Busca el registro de "idVentana" DENTRO de un launcher especifico;
+   si no existe todavia, lo crea. Se debe llamar con
+   rl->mutexVentanas YA tomado. */
+static RegistroVentana *buscarOCrearRegistroVentana(RegistroLauncher *rl, int idVentana)
+{
+    int i;
+
+    for (i = 0; i < rl->totalVentanas; i++)
+    {
+        if (rl->ventanas[i].idVentana == idVentana)
+        {
+            return &rl->ventanas[i];
+        }
+    }
+
+    if (rl->totalVentanas == rl->capacidadVentanas)
+    {
+        int nuevaCapacidad = (rl->capacidadVentanas == 0) ? 8 : rl->capacidadVentanas * 2;
+        RegistroVentana *nuevo = realloc(rl->ventanas, sizeof(RegistroVentana) * (size_t)nuevaCapacidad);
+
+        if (!nuevo)
+        {
+            fprintf(stderr, "Sin memoria para registrar la ventana %d.\n", idVentana);
+            return NULL;
+        }
+
+        rl->ventanas = nuevo;
+        rl->capacidadVentanas = nuevaCapacidad;
+    }
+
+    rl->ventanas[rl->totalVentanas].idVentana = idVentana;
+    documentoInicializar(&rl->ventanas[rl->totalVentanas].documento);
+    rl->ventanas[rl->totalVentanas].clasificacionActual = DESCONOCIDO;
+    rl->totalVentanas++;
+
+    return &rl->ventanas[rl->totalVentanas - 1];
+}
+
+/* ================================================================
    Cola de oraciones pendientes (productor: hilos de conexion,
-   consumidor: el hilo Loader)
+   consumidor: el hilo Loader). Es GLOBAL a todo el servidor -- P es
+   un limite de recursos del "data center" completo, compartido por
+   todos los launchers conectados; lo que se mantiene separado es el
+   RESULTADO de la clasificacion (por eso cada oracion en la cola
+   carga tambien su idLauncher, para saber a que contexto pertenece).
    ================================================================ */
 
 typedef struct NodoOracion
 {
+    int idLauncher;
     int idVentana;
     char texto[TAMANO_BUFFER];
     struct NodoOracion *siguiente;
@@ -100,11 +234,9 @@ static NodoOracion *colaFinal = NULL;
 static int colaCantidad = 0;
 
 static pthread_mutex_t mutexCola = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t condLoteListo = PTHREAD_COND_INITIALIZER;  /* avisa al Loader que ya hay >= P */
+static pthread_cond_t condLoteListo = PTHREAD_COND_INITIALIZER;
 
-/* Encola una oracion recien completada. La llaman los hilos de
-   conexion (uno por ventana) cada vez que reciben un '\n'. */
-static void encolarOracion(int idVentana, const char *texto)
+static void encolarOracion(int idLauncher, int idVentana, const char *texto)
 {
     NodoOracion *nodo = malloc(sizeof(NodoOracion));
 
@@ -114,6 +246,7 @@ static void encolarOracion(int idVentana, const char *texto)
         return;
     }
 
+    nodo->idLauncher = idLauncher;
     nodo->idVentana = idVentana;
     strncpy(nodo->texto, texto, sizeof(nodo->texto) - 1);
     nodo->texto[sizeof(nodo->texto) - 1] = '\0';
@@ -140,9 +273,6 @@ static void encolarOracion(int idVentana, const char *texto)
     pthread_mutex_unlock(&mutexCola);
 }
 
-/* Saca EXACTAMENTE "cantidad" nodos del frente de la cola y los deja
-   en "lote[]". Se debe llamar con mutexCola YA tomado, y solo despues
-   de confirmar que colaCantidad >= cantidad. */
 static void sacarLoteDeCola(NodoOracion *lote[], int cantidad)
 {
     int i;
@@ -163,68 +293,10 @@ static void sacarLoteDeCola(NodoOracion *lote[], int cantidad)
 }
 
 /* ================================================================
-   Registro de documentos por ventana (compartido: oraciones de la
-   MISMA ventana pueden ser procesadas por hilos de deteccion
-   DISTINTOS en lotes distintos, asi que el vector acumulado de cada
-   ventana necesita su propia proteccion).
+   Decision de tipo de usuario -- POR LAUNCHER, asincronica: se
+   reevalua cada vez que la clasificacion de una ventana DE ESE
+   launcher cambia.
    ================================================================ */
-
-typedef struct
-{
-    int idVentana;
-    DocumentoVentana documento;
-    int clasificacionActual;  /* EMAIL / ARTICULO / REPORTE / DESCONOCIDO */
-} RegistroVentana;
-
-static RegistroVentana *registros = NULL;
-static int totalRegistros = 0;
-static int capacidadRegistros = 0;
-static pthread_mutex_t mutexRegistros = PTHREAD_MUTEX_INITIALIZER;
-
-/* Busca el registro de "idVentana"; si no existe todavia (es la
-   primera oracion que llega de esa ventana), lo crea. Se debe llamar
-   con mutexRegistros YA tomado. */
-static RegistroVentana *buscarOCrearRegistro(int idVentana)
-{
-    int i;
-
-    for (i = 0; i < totalRegistros; i++)
-    {
-        if (registros[i].idVentana == idVentana)
-        {
-            return &registros[i];
-        }
-    }
-
-    if (totalRegistros == capacidadRegistros)
-    {
-        int nuevaCapacidad = (capacidadRegistros == 0) ? 8 : capacidadRegistros * 2;
-        RegistroVentana *nuevo = realloc(registros, sizeof(RegistroVentana) * (size_t)nuevaCapacidad);
-
-        if (!nuevo)
-        {
-            fprintf(stderr, "Sin memoria para registrar la ventana %d.\n", idVentana);
-            return NULL;
-        }
-
-        registros = nuevo;
-        capacidadRegistros = nuevaCapacidad;
-    }
-
-    registros[totalRegistros].idVentana = idVentana;
-    documentoInicializar(&registros[totalRegistros].documento);
-    registros[totalRegistros].clasificacionActual = DESCONOCIDO;
-    totalRegistros++;
-
-    return &registros[totalRegistros - 1];
-}
-
-/* ================================================================
-   Decision de tipo de usuario (asincronica: se reevalua cada vez que
-   la clasificacion de alguna ventana cambia)
-   ================================================================ */
-
-static int ultimoTipoUsuarioImpreso = -1;  /* -1 = "nada impreso todavia" */
 
 static const char *NOMBRES_TIPO_USUARIO[4] =
 {
@@ -240,78 +312,79 @@ static const char *NOMBRES_TIPO_USUARIO[4] =
    Personal tecnico        :   X
    Profesor                :   X       X
    Estudiante               :          X         X   */
-static void evaluarTipoUsuario(void)
+static void evaluarTipoUsuario(RegistroLauncher *rl)
 {
     int correo, articulo, reporte;
     int tipoDetectado = -1;
     int debeImprimir = 0;
 
-    pthread_mutex_lock(&mutex);
+    pthread_mutex_lock(&rl->mutexContadores);
 
-    correo = documentosCorreo;
-    articulo = documentosArticulo;
-    reporte = documentosReporte;
+    correo = rl->documentosCorreo;
+    articulo = rl->documentosArticulo;
+    reporte = rl->documentosReporte;
 
     if (correo > 0 && reporte > 0 && articulo == 0)
     {
-        tipoDetectado = 0;  /* Personal administrativo */
+        tipoDetectado = 0;
     }
     else if (correo > 0 && articulo == 0 && reporte == 0)
     {
-        tipoDetectado = 1;  /* Personal tecnico */
+        tipoDetectado = 1;
     }
     else if (correo > 0 && articulo > 0 && reporte == 0)
     {
-        tipoDetectado = 2;  /* Profesor */
+        tipoDetectado = 2;
     }
     else if (articulo > 0 && reporte > 0 && correo == 0)
     {
-        tipoDetectado = 3;  /* Estudiante */
+        tipoDetectado = 3;
     }
 
-    if (tipoDetectado != -1 && tipoDetectado != ultimoTipoUsuarioImpreso)
+    if (tipoDetectado != -1 && tipoDetectado != rl->ultimoTipoUsuarioImpreso)
     {
-        ultimoTipoUsuarioImpreso = tipoDetectado;
+        rl->ultimoTipoUsuarioImpreso = tipoDetectado;
         debeImprimir = 1;
     }
 
-    pthread_mutex_unlock(&mutex);
+    pthread_mutex_unlock(&rl->mutexContadores);
 
-    /* El printf se hace FUERA del mutex a proposito: imprimir puede
-       bloquear en I/O, y la seccion critica debe ser lo mas corta
-       posible. */
     if (debeImprimir)
     {
-        printf("\n[ialearner] (asincronico) Tipo de usuario detectado: %s\n\n",
-               NOMBRES_TIPO_USUARIO[tipoDetectado]);
+        printf("\n[ialearner] (asincronico) Launcher %d -> Tipo de usuario: %s\n\n",
+               rl->idLauncher, NOMBRES_TIPO_USUARIO[tipoDetectado]);
         fflush(stdout);
     }
 }
 
 /* ================================================================
-   El trabajo real de un hilo de deteccion: clasificar UNA oracion
+   El trabajo real de un hilo de deteccion: clasificar UNA oracion,
+   dentro del contexto de SU launcher
    ================================================================ */
 
-static void procesarOracion(int idVentana, const char *texto)
+static void procesarOracion(int idLauncher, int idVentana, const char *texto)
 {
+    RegistroLauncher *rl = buscarOCrearLauncher(idLauncher);
     RegistroVentana *registro;
     int clasificacionAnterior;
     int clasificacionNueva;
     int cambioClasificacion;
 
-    pthread_mutex_lock(&mutexRegistros);
-
-    registro = buscarOCrearRegistro(idVentana);
-
-    if (!registro)
+    if (!rl)
     {
-        pthread_mutex_unlock(&mutexRegistros);
         return;
     }
 
-    /* char[] no-const porque documentoAgregarLinea() lo requiere asi,
-       aunque no lo modifica; se copia a un buffer local para no tocar
-       "texto" (que es const desde el llamador). */
+    pthread_mutex_lock(&rl->mutexVentanas);
+
+    registro = buscarOCrearRegistroVentana(rl, idVentana);
+
+    if (!registro)
+    {
+        pthread_mutex_unlock(&rl->mutexVentanas);
+        return;
+    }
+
     {
         char copia[TAMANO_BUFFER];
         strncpy(copia, texto, sizeof(copia) - 1);
@@ -328,68 +401,58 @@ static void procesarOracion(int idVentana, const char *texto)
         registro->clasificacionActual = clasificacionNueva;
     }
 
-    pthread_mutex_unlock(&mutexRegistros);
+    pthread_mutex_unlock(&rl->mutexVentanas);
 
-    /* Actualiza tambien la matriz global (todas las ventanas
-       combinadas), protegida con el mutex general. */
     {
         char copia[TAMANO_BUFFER];
         strncpy(copia, texto, sizeof(copia) - 1);
         copia[sizeof(copia) - 1] = '\0';
 
-        pthread_mutex_lock(&mutex);
-        documentoAgregarLinea(&matrizGlobal, copia);
-        pthread_mutex_unlock(&mutex);
+        pthread_mutex_lock(&rl->mutexContadores);
+        documentoAgregarLinea(&rl->matrizGlobal, copia);
+        pthread_mutex_unlock(&rl->mutexContadores);
     }
 
     if (cambioClasificacion)
     {
-        pthread_mutex_lock(&mutex);
+        pthread_mutex_lock(&rl->mutexContadores);
 
-        if (clasificacionAnterior == EMAIL) documentosCorreo--;
-        else if (clasificacionAnterior == ARTICULO) documentosArticulo--;
-        else if (clasificacionAnterior == REPORTE) documentosReporte--;
+        if (clasificacionAnterior == EMAIL) rl->documentosCorreo--;
+        else if (clasificacionAnterior == ARTICULO) rl->documentosArticulo--;
+        else if (clasificacionAnterior == REPORTE) rl->documentosReporte--;
 
-        if (clasificacionNueva == EMAIL) documentosCorreo++;
-        else if (clasificacionNueva == ARTICULO) documentosArticulo++;
-        else if (clasificacionNueva == REPORTE) documentosReporte++;
+        if (clasificacionNueva == EMAIL) rl->documentosCorreo++;
+        else if (clasificacionNueva == ARTICULO) rl->documentosArticulo++;
+        else if (clasificacionNueva == REPORTE) rl->documentosReporte++;
 
-        pthread_mutex_unlock(&mutex);
+        pthread_mutex_unlock(&rl->mutexContadores);
 
-        /* "Apenas se detecte el tipo de documento... se evalua si es
-           posible determinar el tipo de usuario" (requerimiento 7d). */
         if (clasificacionNueva != DESCONOCIDO)
         {
-            evaluarTipoUsuario();
+            evaluarTipoUsuario(rl);
         }
     }
 }
 
 /* ================================================================
-   Pool de P hilos de deteccion + hilo Loader
+   Pool de P hilos de deteccion + hilo Loader (sin cambios respecto
+   a la version anterior: P es un recurso del servidor completo,
+   compartido por todos los launchers)
    ================================================================ */
 
-static NodoOracion **loteActual;       /* arreglo de P punteros: la oracion asignada a cada hilo en el lote vigente */
-static long generacionLote = 0;        /* se incrementa cada vez que el Loader arma un lote nuevo (evita que un
-                                           hilo procese el mismo lote dos veces -- ver hiloDeteccion) */
+static NodoOracion **loteActual;
+static long generacionLote = 0;
 static int trabajadoresPendientes = 0;
 
 static pthread_mutex_t mutexLote = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t condLoteAsignado = PTHREAD_COND_INITIALIZER;   /* Loader -> hilos: "su oracion ya esta lista" */
-static pthread_cond_t condLoteTerminado = PTHREAD_COND_INITIALIZER;  /* hilos -> Loader: "ya termine mi parte" */
+static pthread_cond_t condLoteAsignado = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t condLoteTerminado = PTHREAD_COND_INITIALIZER;
 
 typedef struct
 {
     int indice;
 } ArgsHiloDeteccion;
 
-/* Cada uno de los P hilos de deteccion se queda BLOQUEADO (sin gastar
-   CPU) hasta que el Loader arma un lote nuevo. "miUltimaGeneracion"
-   es la clave para que un hilo no vuelva a procesar el mismo lote dos
-   veces: solo avanza cuando "generacionLote" es MAYOR que la ultima
-   generacion que el ya proceso -- no basta con una bandera booleana,
-   porque un hilo que termina temprano podria "adelantarse" y leer el
-   mismo lote otra vez antes de que el Loader arme uno nuevo. */
 static void *hiloDeteccion(void *arg)
 {
     ArgsHiloDeteccion *args = (ArgsHiloDeteccion *)arg;
@@ -411,16 +474,16 @@ static void *hiloDeteccion(void *arg)
         miNodo = loteActual[miIndice];
         pthread_mutex_unlock(&mutexLote);
 
-	printf("[deteccion %d] procesando oracion de ventana %d (lote generacion %ld)\n",
-               miIndice, miNodo->idVentana, miUltimaGeneracion);
+        printf("[deteccion %d] procesando oracion (launcher %d, ventana %d), lote %ld\n",
+               miIndice, miNodo->idLauncher, miNodo->idVentana, miUltimaGeneracion);
         fflush(stdout);
 
         /* Trabajo real, EN PARALELO con los otros P-1 hilos: cada uno
            toca SOLO su propio "miNodo" en este punto, sin mutex. */
-        procesarOracion(miNodo->idVentana, miNodo->texto);
+        procesarOracion(miNodo->idLauncher, miNodo->idVentana, miNodo->texto);
 
-	printf("[deteccion %d] termino de procesar la oracion de ventana %d\n",
-               miIndice, miNodo->idVentana);
+        printf("[deteccion %d] termino (launcher %d, ventana %d)\n",
+               miIndice, miNodo->idLauncher, miNodo->idVentana);
         fflush(stdout);
 
         free(miNodo);
@@ -437,10 +500,6 @@ static void *hiloDeteccion(void *arg)
     return NULL;
 }
 
-/* El Loader: espera a que se acumulen P oraciones en la cola, arma un
-   lote, despierta a los P hilos de deteccion A LA VEZ, y espera a que
-   TODOS terminen antes de armar el siguiente lote (requerimientos
-   7c y 7d). */
 static void *hiloLoader(void *arg)
 {
     NodoOracion **nodosLote = malloc(sizeof(NodoOracion *) * (size_t)P);
@@ -480,7 +539,7 @@ static void *hiloLoader(void *arg)
         pthread_mutex_unlock(&mutexLote);
     }
 
-    free(nodosLote);  /* nunca se alcanza en la practica: el bucle es infinito */
+    free(nodosLote);
     return NULL;
 }
 
@@ -491,7 +550,6 @@ static void *hiloLoader(void *arg)
 typedef struct
 {
     int socketCliente;
-    int idVentana;
 } ArgsConexion;
 
 static int siguienteIdVentana = 1;
@@ -508,11 +566,42 @@ static int generarIdVentana(void)
     return id;
 }
 
+/* Lee una linea completa desde el socket "cliente" (hasta un '\n',
+   que NO se incluye en el resultado). Devuelve 0 si logro leer una
+   linea completa, o -1 si la conexion se cerro antes de completarla. */
+static int leerLineaSocket(int cliente, char *buffer, size_t tam)
+{
+    size_t indice = 0;
+    char c;
+    ssize_t leidos;
+
+    while ((leidos = recv(cliente, &c, 1, 0)) > 0)
+    {
+        if (c == '\n')
+        {
+            buffer[indice] = '\0';
+            return 0;
+        }
+        if (indice < tam - 1)
+        {
+            buffer[indice++] = c;
+        }
+    }
+
+    return -1;
+}
+
+static int clientesConectados = 0;
+static pthread_mutex_t mutexClientesConectados = PTHREAD_MUTEX_INITIALIZER;
+
 void *atenderCliente(void *arg)
 {
     ArgsConexion *args = (ArgsConexion *)arg;
     int cliente = args->socketCliente;
-    int idVentana = args->idVentana;
+    int idVentana;
+    int idLauncher;
+    char primeraLinea[TAMANO_BUFFER];
+    int primeraLineaEsOracion = 0;
     char c;
     char linea[TAMANO_BUFFER];
     int indice = 0;
@@ -520,23 +609,64 @@ void *atenderCliente(void *arg)
 
     free(args);
 
-    printf("Nuevo hilo de conexion (ventana %d).\n", idVentana);
+    /* Se lee la primera linea que manda el cliente: debe ser un
+       handshake "VENTANA <id> LAUNCHER <id>" (el "verificador" del
+       paquete de datos), enviado por window.c justo despues de
+       conectar. Esto es lo que le permite a ialearner saber tanto de
+       que VENTANA viene una oracion como de que LAUNCHER (que
+       "computadora"/usuario) es, para mantener sus contextos
+       separados como se aclaro en clase.
+
+       Si la primera linea NO tiene ese formato (por ejemplo, alguien
+       corrio "window" a mano sin pasar por el launcher), esa linea
+       NO se descarta: se trata como la primera oracion real, y se le
+       asigna un id de respaldo tanto de ventana como de launcher
+       (launcher 0 = "sin identificar"). */
+    if (leerLineaSocket(cliente, primeraLinea, sizeof(primeraLinea)) != 0)
+    {
+        close(cliente);
+        return NULL;
+    }
+
+    {
+        int idVentanaRecibido = 0;
+        int idLauncherRecibido = 0;
+
+        if (sscanf(primeraLinea, "VENTANA %d LAUNCHER %d", &idVentanaRecibido, &idLauncherRecibido) == 2 &&
+            idVentanaRecibido > 0 && idLauncherRecibido > 0)
+        {
+            idVentana = idVentanaRecibido;
+            idLauncher = idLauncherRecibido;
+        }
+        else
+        {
+            idVentana = generarIdVentana();
+            idLauncher = 0;
+            primeraLineaEsOracion = 1;
+        }
+    }
+
+    printf("Nuevo hilo de conexion (launcher %d, ventana %d).\n", idLauncher, idVentana);
     fflush(stdout);
+
+    if (primeraLineaEsOracion && primeraLinea[0] != '\0')
+    {
+        printf("[ialearner] [launcher %d][ventana %d] oracion recibida: %s\n",
+               idLauncher, idVentana, primeraLinea);
+        fflush(stdout);
+        encolarOracion(idLauncher, idVentana, primeraLinea);
+    }
 
     while ((leidos = recv(cliente, &c, 1, 0)) > 0)
     {
         if (c == '\n')
         {
             linea[indice] = '\0';
-            printf("[ialearner] [ventana %d] oracion recibida: %s\n", idVentana, linea);
+            printf("[ialearner] [launcher %d][ventana %d] oracion recibida: %s\n",
+                   idLauncher, idVentana, linea);
             fflush(stdout);
 
-            /* En vez de clasificar aqui mismo, se encola para que la
-               procese el pool de P hilos de deteccion -- esto es lo
-               que desacopla "leer la red" de "correr el algoritmo",
-               permitiendo limitar el algoritmo a P hilos sin importar
-               cuantas ventanas esten conectadas. */
-            encolarOracion(idVentana, linea);
+            encolarOracion(idLauncher, idVentana, linea);
 
             indice = 0;
         }
@@ -554,21 +684,22 @@ void *atenderCliente(void *arg)
     if (indice > 0)
     {
         linea[indice] = '\0';
-        printf("[ialearner] [ventana %d] oracion final (sin Enter): %s\n", idVentana, linea);
+        printf("[ialearner] [launcher %d][ventana %d] oracion final (sin Enter): %s\n",
+               idLauncher, idVentana, linea);
         fflush(stdout);
-        encolarOracion(idVentana, linea);
+        encolarOracion(idLauncher, idVentana, linea);
     }
 
-    printf("[ventana %d] Cliente desconectado.\n", idVentana);
+    printf("[launcher %d][ventana %d] Cliente desconectado.\n", idLauncher, idVentana);
     fflush(stdout);
 
-    pthread_mutex_lock(&mutex);
+    pthread_mutex_lock(&mutexClientesConectados);
     clientesConectados--;
     if (clientesConectados == 0)
     {
         mostrarResumenFinal();
     }
-    pthread_mutex_unlock(&mutex);
+    pthread_mutex_unlock(&mutexClientesConectados);
 
     close(cliente);
 
@@ -576,29 +707,50 @@ void *atenderCliente(void *arg)
 }
 
 /* ================================================================
-   Resumen (snapshot manual del estado acumulado hasta el momento)
+   Resumen (snapshot manual, separado por launcher)
    ================================================================ */
 
 void mostrarResumenFinal(void)
 {
-    int total = documentosCorreo + documentosArticulo + documentosReporte;
+    int i;
+
+    pthread_mutex_lock(&mutexLaunchers);
 
     printf("\n=============================\n");
-    printf("RESUMEN ACUMULADO\n\n");
-    printf("Correo electronico : %d\n", documentosCorreo);
-    printf("Articulo cientifico: %d\n", documentosArticulo);
-    printf("Reporte            : %d\n", documentosReporte);
+    printf("RESUMEN ACUMULADO (por launcher / computadora)\n");
 
-    printf("\nMatriz global (todas las ventanas combinadas, en vivo):\n");
-    documentoImprimirResumen(&matrizGlobal);
-
-    if (total == 0)
+    if (totalLaunchers == 0)
     {
-        printf("\nNo hay documentos clasificados todavia.\n");
+        printf("Todavia no se ha conectado ningun launcher.\n");
+    }
+
+    for (i = 0; i < totalLaunchers; i++)
+    {
+        RegistroLauncher *rl = launchers[i];
+        int total;
+
+        pthread_mutex_lock(&rl->mutexContadores);
+
+        printf("\n--- Launcher %d ---\n", rl->idLauncher);
+        printf("Correo electronico : %d\n", rl->documentosCorreo);
+        printf("Articulo cientifico: %d\n", rl->documentosArticulo);
+        printf("Reporte            : %d\n", rl->documentosReporte);
+        printf("Matriz global de este launcher:\n");
+        documentoImprimirResumen(&rl->matrizGlobal);
+
+        total = rl->documentosCorreo + rl->documentosArticulo + rl->documentosReporte;
+        if (total == 0)
+        {
+            printf("(sin documentos clasificados todavia)\n");
+        }
+
+        pthread_mutex_unlock(&rl->mutexContadores);
     }
 
     printf("=============================\n\n");
     fflush(stdout);
+
+    pthread_mutex_unlock(&mutexLaunchers);
 }
 
 /* ================================================================
@@ -697,11 +849,6 @@ int main(int argc, char *argv[])
     pthread_t *hilosDeteccion;
     pthread_t hiloLoaderTid;
 
-    /* ---- Analisis de argumentos ----
-       -p N / --hilos N  : cantidad de hilos de deteccion (P). Puede ir
-                            en cualquier posicion.
-       El resto de los argumentos, EN ORDEN, son: puerto, carpeta de
-       diccionarios (ambos opcionales, con valores por defecto). */
     P = 0;
 
     for (i = 1; i < argc; i++)
@@ -723,17 +870,10 @@ int main(int argc, char *argv[])
         }
     }
 
-    /* La cantidad de CPUs NUNCA se recibe como parametro: siempre se
-       detecta en tiempo de ejecucion, porque cada "computador"
-       (simulado con un puerto distinto) puede correr en una maquina
-       distinta con una cantidad de nucleos distinta. */
     cantidadCPUs = detectarCantidadCPUs();
 
     if (P <= 0)
     {
-        /* Si no se paso -p (o se paso un valor invalido), se usa un
-           valor por defecto razonable basado en los CPUs detectados,
-           en vez de fallar o de usar un numero fijo arbitrario. */
         P = cantidadCPUs;
     }
 
@@ -757,8 +897,6 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    documentoInicializar(&matrizGlobal);
-
     signal(SIGPIPE, SIG_IGN);
 
     servidor = crearSocketEscucha(puerto);
@@ -774,7 +912,6 @@ int main(int argc, char *argv[])
     printf("IA Learner escuchando en el puerto %s.\n", puerto);
     fflush(stdout);
 
-    /* ---- Arrancar el pool de P hilos de deteccion + el Loader ---- */
     loteActual = malloc(sizeof(NodoOracion *) * (size_t)P);
     hilosDeteccion = malloc(sizeof(pthread_t) * (size_t)P);
 
@@ -816,7 +953,6 @@ int main(int argc, char *argv[])
     }
     pthread_detach(hiloLoaderTid);
 
-    /* ---- Bucle principal: aceptar conexiones de ventanas ---- */
     while (1)
     {
         ArgsConexion *args = malloc(sizeof(ArgsConexion));
@@ -837,22 +973,20 @@ int main(int argc, char *argv[])
             continue;
         }
 
-        args->idVentana = generarIdVentana();
-
-        printf("Nueva conexion (ventana %d).\n", args->idVentana);
+        printf("Nueva conexion aceptada, esperando identificacion...\n");
         fflush(stdout);
 
-        pthread_mutex_lock(&mutex);
+        pthread_mutex_lock(&mutexClientesConectados);
         clientesConectados++;
-        pthread_mutex_unlock(&mutex);
+        pthread_mutex_unlock(&mutexClientesConectados);
 
         if (pthread_create(&hilo, NULL, atenderCliente, args) != 0)
         {
             perror("pthread_create (conexion)");
 
-            pthread_mutex_lock(&mutex);
+            pthread_mutex_lock(&mutexClientesConectados);
             clientesConectados--;
-            pthread_mutex_unlock(&mutex);
+            pthread_mutex_unlock(&mutexClientesConectados);
 
             close(args->socketCliente);
             free(args);
@@ -863,7 +997,6 @@ int main(int argc, char *argv[])
     }
 
     close(servidor);
-    documentoLiberar(&matrizGlobal);
     liberarDiccionarios();
 
     return 0;
