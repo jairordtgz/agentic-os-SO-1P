@@ -1,7 +1,3 @@
-/* _GNU_SOURCE debe ir ANTES de cualquier #include: es lo que le pide
-   a glibc que exponga pthread_setaffinity_np, CPU_SET y CPU_ZERO,
-   necesarios para el balanceo de carga entre CPUs (requerimiento 7a).
-   Sin esto, esas funciones/macros no estarian declaradas. */
 #define _GNU_SOURCE
 
 #include <stdio.h>
@@ -23,15 +19,11 @@
 #define CARPETA_DICCIONARIOS_DEFECTO "diccionarios"
 #define TAMANO_BUFFER 1024
 
-/* ================================================================
-   Deteccion del entorno: CPUs y tamaño del pool de hilos (P)
-   ================================================================ */
-
 static int cantidadCPUs;
 static int P;  /* cantidad de hilos de deteccion, parametro -p / --hilos */
 
-/* Detecta cuantos nucleos de CPU tiene ESTA maquina en tiempo de
-   ejecucion. Nunca se recibe como parametro. */
+/* Detecta cuantos nucleos de CPU tiene la compu en tiempo de
+   ejecucion.*/
 static int detectarCantidadCPUs(void)
 {
     long n = sysconf(_SC_NPROCESSORS_ONLN);
@@ -44,8 +36,7 @@ static int detectarCantidadCPUs(void)
     return (int)n;
 }
 
-/* Reparte los P hilos de deteccion entre los CPUs disponibles en
-   "round robin" (balanceo de carga, requerimiento 7a). */
+/* Reparte los P hilos de deteccion entre los CPUs disponibles  */
 static void asignarCPU(pthread_t hilo, int indiceHilo)
 {
     cpu_set_t conjunto;
@@ -60,9 +51,6 @@ static void asignarCPU(pthread_t hilo, int indiceHilo)
     }
 }
 
-/* ================================================================
-   Registro por VENTANA (documento acumulado de una ventana especifica)
-   ================================================================ */
 
 typedef struct
 {
@@ -71,22 +59,19 @@ typedef struct
     int clasificacionActual;  /* EMAIL / ARTICULO / REPORTE / DESCONOCIDO */
 } RegistroVentana;
 
-/* ================================================================
-   Registro por LAUNCHER (= una "computadora"/usuario independiente).
-   Cada launcher que se conecta tiene su PROPIO contexto completo:
-   sus propias ventanas, sus propios contadores, su propia matriz
-   global y su propia decision de tipo de usuario -- nada de esto se
-   mezcla entre launchers distintos, tal como se aclaro en clase. */
+/*
+   Registro por launcher (computadora).
+   Cada launcher que se conecta tiene sus propias ventanas, contadores de documentos, matriz global*/
 typedef struct
 {
     int idLauncher;
 
-    pthread_mutex_t mutexVentanas;   /* protege "ventanas" de ESTE launcher */
+    pthread_mutex_t mutexVentanas;
     RegistroVentana *ventanas;
     int totalVentanas;
     int capacidadVentanas;
 
-    pthread_mutex_t mutexContadores; /* protege lo de abajo, de ESTE launcher */
+    pthread_mutex_t mutexContadores;
     int documentosCorreo;
     int documentosArticulo;
     int documentosReporte;
@@ -94,13 +79,6 @@ typedef struct
     int ultimoTipoUsuarioImpreso;
 } RegistroLauncher;
 
-/* Arreglo de PUNTEROS, no de structs por valor: cada RegistroLauncher
-   se reserva una sola vez con malloc y JAMAS se mueve de direccion.
-   Si fuera un arreglo de structs por valor, hacer crecer el arreglo
-   con realloc podria reubicar en memoria un mutex que otro hilo tiene
-   tomado en ese preciso instante -- eso es comportamiento indefinido.
-   Con punteros, lo unico que realloc mueve es la lista de direcciones,
-   nunca el contenido real de cada RegistroLauncher. */
 static RegistroLauncher **launchers = NULL;
 static int totalLaunchers = 0;
 static int capacidadLaunchers = 0;
@@ -174,9 +152,7 @@ static RegistroLauncher *buscarOCrearLauncher(int idLauncher)
     return nuevo;
 }
 
-/* Busca el registro de "idVentana" DENTRO de un launcher especifico;
-   si no existe todavia, lo crea. Se debe llamar con
-   rl->mutexVentanas YA tomado. */
+/* Busca el registro de "idVentana" de un launcher especifico */
 static RegistroVentana *buscarOCrearRegistroVentana(RegistroLauncher *rl, int idVentana)
 {
     int i;
@@ -212,14 +188,11 @@ static RegistroVentana *buscarOCrearRegistroVentana(RegistroLauncher *rl, int id
     return &rl->ventanas[rl->totalVentanas - 1];
 }
 
-/* ================================================================
-   Cola de oraciones pendientes (productor: hilos de conexion,
-   consumidor: el hilo Loader). Es GLOBAL a todo el servidor -- P es
-   un limite de recursos del "data center" completo, compartido por
-   todos los launchers conectados; lo que se mantiene separado es el
-   RESULTADO de la clasificacion (por eso cada oracion en la cola
-   carga tambien su idLauncher, para saber a que contexto pertenece).
-   ================================================================ */
+/*
+Cola de oraciones pendientes, se comparte los hilos declarados en ialearner
+pero se mantiene separado el resultado de la clasificacion, usa el idlauncher
+para idenfificar que que launcher proviene la oracion
+*/
 
 typedef struct NodoOracion
 {
@@ -292,12 +265,6 @@ static void sacarLoteDeCola(NodoOracion *lote[], int cantidad)
     }
 }
 
-/* ================================================================
-   Decision de tipo de usuario -- POR LAUNCHER, asincronica: se
-   reevalua cada vez que la clasificacion de una ventana DE ESE
-   launcher cambia.
-   ================================================================ */
-
 static const char *NOMBRES_TIPO_USUARIO[4] =
 {
     "Personal administrativo",
@@ -306,12 +273,6 @@ static const char *NOMBRES_TIPO_USUARIO[4] =
     "Estudiante"
 };
 
-/* Tabla 2 de este parcial:
-                              Correo  Articulo  Reporte
-   Personal administrativo :   X                 X
-   Personal tecnico        :   X
-   Profesor                :   X       X
-   Estudiante               :          X         X   */
 static void evaluarTipoUsuario(RegistroLauncher *rl)
 {
     int correo, articulo, reporte;
@@ -357,10 +318,10 @@ static void evaluarTipoUsuario(RegistroLauncher *rl)
     }
 }
 
-/* ================================================================
-   El trabajo real de un hilo de deteccion: clasificar UNA oracion,
-   dentro del contexto de SU launcher
-   ================================================================ */
+/*
+   El trabajo real de un hilo de deteccion: clasificar oracion
+   dentro del contexto de su launcher
+*/
 
 static void procesarOracion(int idLauncher, int idVentana, const char *texto)
 {
@@ -434,11 +395,6 @@ static void procesarOracion(int idLauncher, int idVentana, const char *texto)
     }
 }
 
-/* ================================================================
-   Pool de P hilos de deteccion + hilo Loader (sin cambios respecto
-   a la version anterior: P es un recurso del servidor completo,
-   compartido por todos los launchers)
-   ================================================================ */
 
 static NodoOracion **loteActual;
 static long generacionLote = 0;
@@ -478,8 +434,6 @@ static void *hiloDeteccion(void *arg)
                miIndice, miNodo->idLauncher, miNodo->idVentana, miUltimaGeneracion);
         fflush(stdout);
 
-        /* Trabajo real, EN PARALELO con los otros P-1 hilos: cada uno
-           toca SOLO su propio "miNodo" en este punto, sin mutex. */
         procesarOracion(miNodo->idLauncher, miNodo->idVentana, miNodo->texto);
 
         printf("[deteccion %d] termino (launcher %d, ventana %d)\n",
@@ -543,10 +497,8 @@ static void *hiloLoader(void *arg)
     return NULL;
 }
 
-/* ================================================================
-   Hilos de conexion: uno por ventana, solo leen la red y encolan
-   ================================================================ */
-
+/* Hilos de conexion: uno por ventana
+*/
 typedef struct
 {
     int socketCliente;
@@ -566,9 +518,6 @@ static int generarIdVentana(void)
     return id;
 }
 
-/* Lee una linea completa desde el socket "cliente" (hasta un '\n',
-   que NO se incluye en el resultado). Devuelve 0 si logro leer una
-   linea completa, o -1 si la conexion se cerro antes de completarla. */
 static int leerLineaSocket(int cliente, char *buffer, size_t tam)
 {
     size_t indice = 0;
@@ -609,19 +558,6 @@ void *atenderCliente(void *arg)
 
     free(args);
 
-    /* Se lee la primera linea que manda el cliente: debe ser un
-       handshake "VENTANA <id> LAUNCHER <id>" (el "verificador" del
-       paquete de datos), enviado por window.c justo despues de
-       conectar. Esto es lo que le permite a ialearner saber tanto de
-       que VENTANA viene una oracion como de que LAUNCHER (que
-       "computadora"/usuario) es, para mantener sus contextos
-       separados como se aclaro en clase.
-
-       Si la primera linea NO tiene ese formato (por ejemplo, alguien
-       corrio "window" a mano sin pasar por el launcher), esa linea
-       NO se descarta: se trata como la primera oracion real, y se le
-       asigna un id de respaldo tanto de ventana como de launcher
-       (launcher 0 = "sin identificar"). */
     if (leerLineaSocket(cliente, primeraLinea, sizeof(primeraLinea)) != 0)
     {
         close(cliente);
@@ -706,9 +642,7 @@ void *atenderCliente(void *arg)
     return NULL;
 }
 
-/* ================================================================
-   Resumen (snapshot manual, separado por launcher)
-   ================================================================ */
+// resumen por launcher
 
 void mostrarResumenFinal(void)
 {
@@ -753,9 +687,7 @@ void mostrarResumenFinal(void)
     pthread_mutex_unlock(&mutexLaunchers);
 }
 
-/* ================================================================
-   Arranque del servidor
-   ================================================================ */
+// obtener carpeta de diccionarios
 
 static int obtenerCarpetaDiccionariosPorDefecto(char *buffer, size_t tam)
 {

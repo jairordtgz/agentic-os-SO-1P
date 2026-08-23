@@ -29,9 +29,8 @@ int conectarServidor(const char *host, const char *puerto)
         return -1;
     }
 
-    /* inet_pton devuelve 1 solo si "host" es una IPv4 valida. Usamos
-       esto en vez de inet_addr porque inet_addr no distingue bien
-       una IP invalida de la IP 255.255.255.255. */
+// determinar si un host/ip es valido
+
     if (inet_pton(AF_INET, host, &direccionIP) != 1)
     {
         fprintf(stderr, "Direccion IP invalida: %s\n", host);

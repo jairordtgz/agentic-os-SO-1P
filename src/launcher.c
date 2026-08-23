@@ -10,13 +10,6 @@
 
 #include "launcher.h"
 
-/* ---- Tabla de procesos (TDA) ----
-   Guarda el PID y el estado de cada ventana creada. A diferencia de
-   una version anterior, esta tabla NO tiene un tope fijo (no existe
-   ningun "MAX_VENTANAS"): crece dinamicamente con realloc segun se
-   necesite, para que "N ventanas" pueda ser realmente cualquier
-   cantidad que la maquina soporte, tal como lo pide el enunciado. */
-
 #define CAPACIDAD_INICIAL 8
 #define UMBRAL_ADVERTENCIA 100
 
@@ -44,9 +37,6 @@ static void manejadorSigchld(int sig)
     huboProcesoTerminado = 1;
 }
 
-/* Agrega una ventana a la tabla, haciendo crecer el arreglo al doble
-   de su capacidad cuando ya no cabe. Devuelve -1 solo si de verdad no
-   hay memoria disponible (caso extremo, no un limite artificial). */
 static int tablaAgregar(int idVentana, pid_t pid)
 {
     if (totalRegistrados == capacidadTabla)
@@ -85,9 +75,6 @@ static void tablaMarcarTerminado(pid_t pid)
     }
 }
 
-/* WNOHANG: si no hay ningun hijo terminado todavia, waitpid regresa
-   de inmediato en vez de bloquear el programa. Asi el menu puede
-   seguir respondiendo mientras las ventanas siguen abiertas. */
 static void revisarProcesosTerminados(void)
 {
     int status;
@@ -143,10 +130,6 @@ static void tablaLiberar(void)
     capacidadTabla = 0;
 }
 
-/* Construye la ruta del ejecutable "window" a partir de la ubicacion
-   del propio launcher (leyendo /proc/self/exe), en vez de usar una
-   ruta relativa fija como "./bin/window". Asi el programa funciona
-   sin importar desde que carpeta se ejecute el launcher. */
 static int obtenerRutaWindow(char *buffer, size_t tam)
 {
     ssize_t n = readlink("/proc/self/exe", buffer, tam - 1);
@@ -183,11 +166,6 @@ static int obtenerRutaWindow(char *buffer, size_t tam)
 static void crearVentana(int idVentana, const char *rutaWindow,
                           const char *host, const char *puerto)
 {
-    /* getpid() se llama AQUI, antes del fork -- en este punto todavia
-       estamos en el proceso del launcher, asi que devuelve el PID del
-       launcher. Si se llamara despues del fork, dentro de la rama del
-       hijo (pid == 0), devolveria el PID del HIJO, no el del launcher
-       -- por eso se captura antes y se reutiliza el valor ya guardado. */
     pid_t idLauncher = getpid();
     pid_t pid = fork();
 
@@ -202,26 +180,17 @@ static void crearVentana(int idVentana, const char *rutaWindow,
         char idVentanaStr[16];
         char idLauncherStr[16];
 
-        /* Cada ventana pasa a formar su propio grupo de procesos.
-           Sin esto, heredaria el mismo grupo que el launcher y la
-           terminal, y un Ctrl+C hecho en la terminal del launcher
-           (SIGINT) se propagaria a TODAS las ventanas a la vez,
-           cerrandolas todas de golpe en vez de solo al launcher. */
         setpgid(0, 0);
 
         /* Se le pasan idVentana e idLauncher como argumentos para que
-           window.c pueda identificarse ante ialearner con los MISMOS
-           numeros que el usuario ve aqui en el launcher -- asi ambos
-           lados de la conexion se pueden correlacionar, y ialearner
-           puede mantener el contexto de este launcher (esta
-           "computadora") separado del de cualquier otro launcher que
-           tambien este conectado. */
+           window.c pueda identificarse ante ialearner con los mismos
+           numeros que el usuario ve en el launcher */
+
         snprintf(idVentanaStr, sizeof(idVentanaStr), "%d", idVentana);
         snprintf(idLauncherStr, sizeof(idLauncherStr), "%d", (int)idLauncher);
 
         execl(rutaWindow, "window", host, puerto, idVentanaStr, idLauncherStr, (char *)NULL);
 
-        /* Si execl regresa, es porque fallo. */
         fprintf(stderr, "Error ejecutando window: %s\n", strerror(errno));
         exit(EXIT_FAILURE);
     }
@@ -236,9 +205,6 @@ static void crearVentana(int idVentana, const char *rutaWindow,
     }
 }
 
-/* Crea "cantidad" ventanas nuevas. No existe un tope maximo propio
-   del programa: el unico limite real es lo que la maquina pueda
-   soportar (procesos, memoria, conexiones de X11). */
 void crearVentanas(int cantidad, const char *host, const char *puerto)
 {
     static int siguienteId = 1;
@@ -258,11 +224,6 @@ void crearVentanas(int cantidad, const char *host, const char *puerto)
     }
 }
 
-/* Lee una linea completa de stdin, sin dejar el salto de linea final
-   ni caracteres sobrantes en el buffer de entrada -- a diferencia de
-   scanf("%d", ...), que ante una entrada invalida (por ejemplo una
-   letra) puede dejar el programa repitiendo el mensaje de error para
-   siempre sin poder recuperarse. */
 static int leerLinea(char *buffer, size_t tam)
 {
     if (!fgets(buffer, (int)tam, stdin))
@@ -274,10 +235,8 @@ static int leerLinea(char *buffer, size_t tam)
     return 0;
 }
 
-/* Lee una linea de texto; si el usuario deja la entrada vacia
-   (solo presiona Enter), se usa "porDefecto" en su lugar. Se usa
-   para pedir el host/puerto de la "computadora remota" a la que se
-   conectara un lote de ventanas, sin obligar a escribirlo cada vez. */
+/* Lee una linea de texto */
+
 static void leerTexto(const char *mensaje, const char *porDefecto, char *destino, size_t tam)
 {
     char linea[128];
@@ -293,10 +252,8 @@ static void leerTexto(const char *mensaje, const char *porDefecto, char *destino
 
     snprintf(destino, tam, "%s", linea);
 }
+// permite ingresar solo numeros positivos en launcher
 
-/* Pide un numero entero dentro de [minimo, maximo], repitiendo la
-   pregunta mientras la entrada no sea valida. Devuelve -1 si la
-   entrada se cerro (por ejemplo con Ctrl+D). */
 static int leerEnteroPositivo(const char *mensaje, int minimo, int maximo)
 {
     char linea[32];
@@ -331,10 +288,7 @@ static int leerEnteroPositivo(const char *mensaje, int minimo, int maximo)
     }
 }
 
-/* Si el usuario pide una cantidad muy grande de ventanas, se le avisa
-   y se le pide confirmar. No es un limite del programa, es solo una
-   proteccion contra errores de tecleo (ej. escribir de mas un cero),
-   ya que crear miles de procesos de golpe puede saturar la maquina. */
+/* muestra al usuario advertencia de que si esta seguro crear mas de 100 ventanas */
 static int confirmarCantidadGrande(int cantidad)
 {
     char respuesta[8];
@@ -395,7 +349,6 @@ void mostrarMenu(const char *host, const char *puerto)
 
         if (opcion < 0)
         {
-            /* Entrada cerrada (Ctrl+D): salimos con cuidado. */
             salir = 1;
             continue;
         }
@@ -404,8 +357,6 @@ void mostrarMenu(const char *host, const char *puerto)
         {
             case 1:
             {
-                /* Sin tope maximo propio: solo INT_MAX como limite
-                   tecnico del tipo "int", no una regla de negocio. */
                 char hostLote[128];
                 char puertoLote[16];
 
@@ -416,14 +367,9 @@ void mostrarMenu(const char *host, const char *puerto)
                     break;
                 }
 
-                /* Cada lote de ventanas puede apuntar a una
-                   "computadora remota" distinta (un ialearner en
-                   otro puerto, simulando otra maquina) -- si el
-                   usuario solo presiona Enter, se usa el host/puerto
-                   por defecto de esta sesion del launcher. */
-                leerTexto("Host de la computadora remota [Enter para usar el de por defecto]: ",
+                leerTexto("Host de ialearner [Enter para usar el de por defecto]: ",
                           host, hostLote, sizeof(hostLote));
-                leerTexto("Puerto de la computadora remota [Enter para usar el de por defecto]: ",
+                leerTexto("Puerto de la computadora [Enter para usar el de por defecto]: ",
                           puerto, puertoLote, sizeof(puertoLote));
 
                 if (confirmarCantidadGrande(cantidad))
@@ -457,8 +403,7 @@ void mostrarMenu(const char *host, const char *puerto)
         }
     }
 
-    /* Al salir, nos aseguramos de no dejar ventanas huerfanas
-       corriendo sin que nadie las este esperando. */
+    /* Al salir, nos aseguramos de no dejar ventanas huerfanas */
     terminarTodas();
 
     {
@@ -476,13 +421,10 @@ void mostrarMenu(const char *host, const char *puerto)
 
 int main(int argc, char *argv[])
 {
+	// se usa este host y puerto en caso de que el usuario ingrese enter en host y puerto
     const char *host = "127.0.0.1";
     const char *puerto = "5000";
 
-    /* Permite indicar host y puerto del data center como argumentos:
-       ./launcher [host] [puerto]. Estos valores solo se usan si el
-       usuario NO especifica nada -- por lo tanto no estan "quemados":
-       cualquiera puede cambiarlos sin tocar ni recompilar el codigo. */
     if (argc >= 2)
     {
         host = argv[1];

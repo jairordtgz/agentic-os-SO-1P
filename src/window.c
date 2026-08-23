@@ -58,9 +58,6 @@ void procesarEventos(Display *display, Atom wmDelete, int socketServidor)
     XEvent event;
     int salir = 0;
 
-    /* Se usa una variable "salir" en vez de while(1) con un break
-       escondido en medio: asi la condicion de salida queda visible
-       en el encabezado del ciclo. */
     while (!salir)
     {
         XNextEvent(display, &event);
@@ -71,10 +68,6 @@ void procesarEventos(Display *display, Atom wmDelete, int socketServidor)
             KeySym keysym;
             int longitud;
 
-            /* Se pide sizeof(texto)-1, no sizeof(texto): asi siempre
-               queda un byte libre para el caracter nulo que se
-               agrega despues, y XLookupString nunca puede devolver
-               mas caracteres de los que el buffer soporta. */
             longitud = XLookupString(&event.xkey,
                                       texto,
                                       sizeof(texto) - 1,
@@ -128,16 +121,15 @@ int main(int argc, char *argv[])
 {
     const char *host = SERVER_IP_DEFECTO;
     const char *puerto = SERVER_PORT_DEFECTO;
-    int idVentana = 0;   /* 0 = "sin id asignado" (por ejemplo, si se corre a mano sin el launcher) */
-    int idLauncher = 0;  /* 0 = "sin launcher identificado" */
+    int idVentana = 0;
+    int idLauncher = 0;
     int socketServidor;
     Display *display;
     Window window;
     Atom wmDelete;
 
     /* El launcher pasa host, puerto, idVentana e idLauncher como
-       argumentos. Si se ejecuta "window" a mano sin argumentos, se
-       usan los valores por defecto (solo para pruebas locales). */
+       argumentos */
     if (argc >= 2)
     {
         host = argv[1];
@@ -163,9 +155,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    /* Linea de identificacion ("verificador"): se manda ANTES que
-       cualquier tecla, con AMBOS ids -- el de la ventana y el del
-       launcher que la creo. Asi ialearner sabe no solo de que
+    /* ialearner sabe no solo de que
        ventana viene cada oracion, sino tambien a que "computadora"
        (launcher) pertenece, para mantener cada contexto separado. */
     {

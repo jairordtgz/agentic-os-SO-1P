@@ -9,7 +9,7 @@
 
 /* Abre una conexion TCP hacia host:puerto.
    Devuelve el descriptor de socket (>=0) si tuvo exito, o -1 si hubo
-   error (direccion invalida, puerto invalido, o el connect fallo). */
+   error */
 int conectarServidor(const char *host, const char *puerto);
 
 #endif
