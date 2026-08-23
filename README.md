@@ -74,4 +74,4 @@ mismo `ialearner`
 ### 4. Usar las ventanas
 
 En cada ventana: escribe texto y presiona **Enter** para cerrar una
-oración
+oración.
