@@ -66,9 +66,13 @@ mismo `ialearner`
 
 # Terminal 2 (computadora 1)
 ./launcher
+seleccionar 1, crear n ventanas, host (enter para usar el local), puerto (puerto ingresado
+como parametro en ialearner)
 
 # Terminal 3 (computadora 2)
 ./launcher
+seleccionar 1, crear n ventanas, host (enter para usar el local), puerto (puerto ingresado
+como parametro en ialearner)
 ```
 
 ### 4. Usar las ventanas

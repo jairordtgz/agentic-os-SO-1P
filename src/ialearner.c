@@ -345,6 +345,9 @@ static void procesarOracion(int idLauncher, int idVentana, const char *texto)
     if (cambioClasificacion)
     {
         registro->clasificacionActual = clasificacionNueva;
+	printf("[ialearner] [launcher %d][ventana %d] clasificacion actualizada: %s\n",
+               idLauncher, idVentana, nombreClase(clasificacionNueva));
+        fflush(stdout);
     }
 
     pthread_mutex_unlock(&rl->mutexVentanas);
